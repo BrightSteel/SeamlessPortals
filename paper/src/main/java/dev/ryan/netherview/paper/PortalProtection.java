@@ -7,6 +7,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.minecraft.core.BlockPos;
 import org.bukkit.block.Block;
 import org.bukkit.craftbukkit.CraftWorld;
+import org.bukkit.craftbukkit.entity.CraftEntity;
 import org.bukkit.entity.Entity;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -29,7 +30,6 @@ import org.bukkit.event.entity.EntityPortalEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
 import org.bukkit.event.player.PlayerBucketFillEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
-import org.bukkit.util.BoundingBox;
 
 import java.util.List;
 
@@ -45,19 +45,8 @@ final class PortalProtection implements Listener {
 		return CustomPortals.at(((CraftWorld) block.getWorld()).getHandle(), new BlockPos(block.getX(), block.getY(), block.getZ())) != null;
 	}
 
-	/** Whether the entity's box overlaps a custom portal block. */
 	private static boolean touchesPortal(Entity entity) {
-		BoundingBox box = entity.getBoundingBox();
-		for (int x = (int) Math.floor(box.getMinX()); x <= (int) Math.floor(box.getMaxX()); x++) {
-			for (int y = (int) Math.floor(box.getMinY()); y <= (int) Math.floor(box.getMaxY()); y++) {
-				for (int z = (int) Math.floor(box.getMinZ()); z <= (int) Math.floor(box.getMaxZ()); z++) {
-					if (isPortal(entity.getWorld().getBlockAt(x, y, z))) {
-						return true;
-					}
-				}
-			}
-		}
-		return false;
+		return CustomPortals.touches(((CraftEntity) entity).getHandle());
 	}
 
 	// ── the fill's own behaviour ────────────────────────────────────────────

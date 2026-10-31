@@ -17,6 +17,19 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
+import dev.ryan.netherview.server.CustomPortals;
+import dev.ryan.netherview.server.PortalWands;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.permissions.PermissionLevel;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import io.netty.buffer.ByteBuf;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -52,9 +65,39 @@ public class NetherView implements ModInitializer {
 		}, loadServerConfig());
 		ServerTickEvents.END_SERVER_TICK.register(PortalViewServer::tick);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> PortalViewServer.forget(handler.getPlayer()));
+
+		// Custom portals, as on Paper: permission nodes netherview.admin, netherview.use.<name>
+		// and netherview.see.<name> (through Fabric's permission API, so a permissions mod can
+		// grant them), falling back to op level 2.
+		PortalWands.init(player -> player.checkPermission(id("admin"), PermissionLevel.GAMEMASTERS));
+		CustomPortals.init((player, node) -> !node.endsWith("*") && player.checkPermission(id(node), PermissionLevel.GAMEMASTERS),
+				PortalStore::save);
+		ServerLifecycleEvents.SERVER_STARTED.register(PortalStore::load);
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> PortalStore.unload());
+		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> PortalCommand.register(dispatcher));
+		AttackBlockCallback.EVENT.register((player, level, hand, pos, direction) ->
+				player instanceof ServerPlayer serverPlayer && PortalWands.click(serverPlayer, player.getItemInHand(hand), pos, true)
+						? InteractionResult.FAIL : InteractionResult.PASS);
+		UseBlockCallback.EVENT.register((player, level, hand, hit) ->
+				hand == InteractionHand.MAIN_HAND && player instanceof ServerPlayer serverPlayer
+						&& PortalWands.click(serverPlayer, player.getItemInHand(hand), hit.getBlockPos(), false)
+						? InteractionResult.FAIL : InteractionResult.PASS);
+		PlayerBlockBreakEvents.BEFORE.register((level, player, pos, state, blockEntity) -> {
+			if (CustomPortals.at(level, pos) == null) {
+				return true;
+			}
+			if (player instanceof ServerPlayer serverPlayer && PortalWands.isAdmin(serverPlayer)) {
+				serverPlayer.sendOverlayMessage(Component.literal("That's a custom portal: remove it with /nvportal delete <name>").withStyle(ChatFormatting.LIGHT_PURPLE));
+			}
+			return false;
+		});
 	}
 
-	/** Singleplayer only (the mod is client-side); servers use the Paper plugin's config.yml. */
+	public static Identifier id(String path) {
+		return Identifier.fromNamespaceAndPath(MOD_ID, path);
+	}
+
+	/** Singleplayer or a Fabric server; Paper servers use the plugin's config.yml. */
 	private static ServerConfig loadServerConfig() {
 		Path file = FabricLoader.getInstance().getConfigDir().resolve("netherview-server.properties");
 		ServerConfig defaults = ServerConfig.DEFAULTS;
@@ -74,7 +117,7 @@ public class NetherView implements ModInitializer {
 				properties.setProperty("tickDestination", String.valueOf(defaults.tickDestination()));
 				properties.setProperty("seamlessTravel", String.valueOf(defaults.seamlessTravel()));
 				try (Writer writer = Files.newBufferedWriter(file)) {
-					properties.store(writer, "NetherView singleplayer server settings (see ServerConfig for what each does)");
+					properties.store(writer, "NetherView server settings (see ServerConfig for what each does)");
 				}
 			}
 			return new ServerConfig(

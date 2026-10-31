@@ -13,6 +13,11 @@ permissions:
   netherview.admin:
     description: Create, link and delete custom portals, and use the portal wand.
     default: op
-  netherview.portal.*:
-    description: Use every private custom portal (per portal - netherview.portal.<name>).
+  netherview.use.*:
+    description: Use (and see through) every custom portal. Per portal - netherview.use.<name>.
+    default: op
+    children:
+      netherview.see.*: true
+  netherview.see.*:
+    description: See through every custom portal without using it. Per portal - netherview.see.<name>.
     default: op

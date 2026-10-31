@@ -140,11 +140,13 @@ public final class PortalViewServer {
 
 	public static void forget(ServerPlayer player) {
 		PLAYERS.remove(player.getUUID());
+		PortalWands.forget(player.getUUID());
 	}
 
 	private static void tickPlayers(MinecraftServer server) {
 		CustomPortalTravel.tick(server);
 		RandomDestinations.tick(server);
+		PortalWands.tick(server);
 		if (server.getTickCount() % CustomPortalBlocks.REPAIR_INTERVAL == 0) {
 			CustomPortalBlocks.repair(server);
 		}
@@ -321,7 +323,7 @@ public final class PortalViewServer {
 		findNetherLinks(server, level, center, now, links);
 		findEndLinks(server, player, level, center, now, links);
 		for (CustomPortal portal : CustomPortals.near(level, player.position(), config.scanRadius())) {
-			PortalLink link = CustomPortals.canUse(player, portal) ? CustomPortals.link(server, portal) : null;
+			PortalLink link = CustomPortals.canSee(player, portal) ? CustomPortals.link(server, portal) : null;
 			if (link != null && portal.end().width() <= config.maxPortalSize() && portal.end().height() <= config.maxPortalSize()) {
 				links.add(link);
 			}

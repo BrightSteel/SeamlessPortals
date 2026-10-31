@@ -53,6 +53,11 @@ public final class RandomDestinations {
 	private RandomDestinations() {
 	}
 
+	/** Drops every queue (another world's portals were loaded). */
+	static void clear() {
+		QUEUES.clear();
+	}
+
 	/** The spot the portal shows and the next trip goes to, or null while none is ready. */
 	public static Spot peek(String portal) {
 		Queue queue = QUEUES.get(portal);

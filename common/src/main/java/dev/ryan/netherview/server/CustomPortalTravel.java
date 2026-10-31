@@ -34,7 +34,8 @@ final class CustomPortalTravel {
 	/** How far in front of the far opening something is set down after a contact trip (lava). */
 	private static final double CONTACT_EXIT_CLEARANCE = 0.6;
 
-	private static final Map<UUID, Vec3> LAST = new HashMap<>();
+	/** Per portal (portals close together watch the same entities), each entity's point last tick. */
+	private static final Map<String, Map<UUID, Vec3>> LAST = new HashMap<>();
 	private static final Map<UUID, Integer> COOLDOWN = new HashMap<>();
 
 	private CustomPortalTravel() {
@@ -47,8 +48,9 @@ final class CustomPortalTravel {
 			LAST.clear();
 			return;
 		}
-		Set<UUID> seen = new HashSet<>();
+		Set<String> portals = new HashSet<>();
 		for (CustomPortal portal : CustomPortals.all()) {
+			portals.add(portal.name());
 			ServerLevel level = CustomPortals.level(server, portal.world());
 			PortalLink link = level == null ? null : CustomPortals.link(server, portal);
 			if (link == null) {
@@ -60,11 +62,13 @@ final class CustomPortalTravel {
 			// Lava hurts on touch, so it sends on touch: against the whole fill blocks, not the plane.
 			AABB fillBlocks = onContact ? fillBox(portal) : opening;
 			boolean playerSent = false;
+			Map<UUID, Vec3> lastPoints = LAST.computeIfAbsent(portal.name(), n -> new HashMap<>());
+			Set<UUID> seen = new HashSet<>();
 			for (Entity entity : level.getEntities((Entity) null, opening.inflate(WATCH_MARGIN), e -> e.isAlive() && !e.isPassenger())) {
 				UUID id = entity.getUUID();
 				seen.add(id);
 				Vec3 point = referencePoint(entity, geometry);
-				Vec3 last = LAST.put(id, point);
+				Vec3 last = lastPoints.put(id, point);
 				if (COOLDOWN.containsKey(id)) {
 					continue;
 				}
@@ -77,13 +81,14 @@ final class CustomPortalTravel {
 				playerSent |= entity instanceof ServerPlayer || entity.hasPassenger(passenger -> passenger instanceof ServerPlayer);
 				send(server, entity, link, geometry, onContact);
 			}
+			lastPoints.keySet().retainAll(seen);
 			if (playerSent && portal.destination() instanceof CustomPortal.Destination.Random) {
 				// Only a player's trip uses up the spot (mobs and items just follow it there);
 				// everything that went through this tick shares it.
 				RandomDestinations.advance(portal.name());
 			}
 		}
-		LAST.keySet().retainAll(seen);
+		LAST.keySet().retainAll(portals);
 	}
 
 	private static AABB fillBox(CustomPortal portal) {
@@ -121,7 +126,7 @@ final class CustomPortalTravel {
 			PortalViewServer.announceTravel(player, link);
 		}
 		COOLDOWN.put(entity.getUUID(), COOLDOWN_TICKS);
-		LAST.remove(entity.getUUID());
+		LAST.values().forEach(points -> points.remove(entity.getUUID()));
 		Entity moved = entity.teleport(new TeleportTransition(dest, destPos, velocity, rotation[0], rotation[1],
 				entity instanceof ServerPlayer ? TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET) : TeleportTransition.PLACE_PORTAL_TICKET));
 		if (moved != null) {

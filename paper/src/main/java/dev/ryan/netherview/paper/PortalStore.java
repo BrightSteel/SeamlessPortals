@@ -56,7 +56,7 @@ final class PortalStore {
 			section.set("height", end.height());
 			section.set("surface", end.surface());
 			section.set("fill", end.fill().name().toLowerCase(Locale.ROOT));
-			section.set("public", portal.isPublic());
+			section.set("public", portal.access().setting());
 			switch (portal.destination()) {
 				case CustomPortal.Destination.Portal(String partner) -> section.set("destination.portal", partner);
 				case CustomPortal.Destination.Target(String world, double x, double y, double z, float yaw, float pitch) -> {
@@ -94,7 +94,7 @@ final class PortalStore {
 			destination = new CustomPortal.Destination.Target(section.getString("destination.world"), pos.get(0), pos.get(1), pos.get(2),
 					(float) section.getDouble("destination.yaw"), (float) section.getDouble("destination.pitch"));
 		}
-		return new CustomPortal(name, section.getString("world"), end, destination, section.getBoolean("public"));
+		return new CustomPortal(name, section.getString("world"), end, destination, CustomPortal.Access.parse(section.getString("public", "false")));
 	}
 
 	private static Direction direction(String name) {

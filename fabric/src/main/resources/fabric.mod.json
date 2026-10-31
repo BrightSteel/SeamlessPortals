@@ -3,10 +3,10 @@
 	"id": "netherview",
 	"version": "${version}",
 	"name": "NetherView",
-	"description": "Nether portals render the dimension on the other side instead of the portal swirl. Client-only: servers need the NetherView Paper plugin (singleplayer works on its own).",
+	"description": "Nether and end portals show the dimension on the other side, plus admin-defined custom portals. Install on the client to see through portals; on a Fabric server (or Paper with the NetherView plugin) for streaming, travel and /nvportal.",
 	"authors": ["Ryan"],
 	"license": "MIT",
-	"environment": "client",
+	"environment": "*",
 	"entrypoints": {
 		"main": ["dev.ryan.netherview.NetherView"],
 		"client": ["dev.ryan.netherview.client.NetherViewClient"]

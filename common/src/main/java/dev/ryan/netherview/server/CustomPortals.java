@@ -12,7 +12,9 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -20,6 +22,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.BiPredicate;
 
@@ -34,20 +37,21 @@ public final class CustomPortals {
 	private static Map<String, Map<BlockPos, String>> blocks = Map.of();
 	private static Runnable onChange = () -> {
 	};
-	/** Who may use (and see through) a portal; the platform decides (permissions on Paper). */
-	private static BiPredicate<ServerPlayer, CustomPortal> access = (player, portal) -> true;
+	/** Whether a player has a permission node, given without its {@code netherview.} prefix; the platform decides. */
+	private static BiPredicate<ServerPlayer, String> permission = (player, node) -> true;
 
 	private CustomPortals() {
 	}
 
-	public static void init(BiPredicate<ServerPlayer, CustomPortal> accessCheck, Runnable changed) {
-		access = accessCheck;
+	public static void init(BiPredicate<ServerPlayer, String> permissionCheck, Runnable changed) {
+		permission = permissionCheck;
 		onChange = changed;
 	}
 
 	/** Replaces everything (loading from storage); doesn't fire {@link #onChange}. */
 	public static void load(Collection<CustomPortal> portals) {
 		PORTALS.clear();
+		RandomDestinations.clear();
 		portals.forEach(portal -> PORTALS.put(portal.name(), portal));
 		reindex();
 	}
@@ -123,8 +127,33 @@ public final class CustomPortals {
 		return name == null ? null : PORTALS.get(name);
 	}
 
+	/** Whether the entity's box overlaps a custom portal block. */
+	public static boolean touches(Entity entity) {
+		Map<BlockPos, String> world = blocks.get(entity.level().dimension().identifier().toString());
+		if (world == null) {
+			return false;
+		}
+		AABB box = entity.getBoundingBox();
+		for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(box.minX, box.minY, box.minZ), BlockPos.containing(box.maxX, box.maxY, box.maxZ))) {
+			if (world.containsKey(pos)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** May go through it: {@code netherview.use.<name>} or {@code netherview.use.*}, unless everyone may. */
 	public static boolean canUse(ServerPlayer player, CustomPortal portal) {
-		return portal.isPublic() || access.test(player, portal);
+		return portal.access() == CustomPortal.Access.USE || has(player, "use", portal);
+	}
+
+	/** May see through it (otherwise it's just its fill): using it, or {@code netherview.see.<name>} or {@code netherview.see.*}. */
+	public static boolean canSee(ServerPlayer player, CustomPortal portal) {
+		return portal.access() != CustomPortal.Access.PRIVATE || canUse(player, portal) || has(player, "see", portal);
+	}
+
+	private static boolean has(ServerPlayer player, String kind, CustomPortal portal) {
+		return permission.test(player, kind + "." + portal.name().toLowerCase(Locale.ROOT)) || permission.test(player, kind + ".*");
 	}
 
 	/** Portals in {@code level} whose opening is within {@code radius} of {@code center}. */
