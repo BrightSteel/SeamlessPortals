@@ -24,6 +24,13 @@ loom {
 			programArgs "--quickPlayMultiplayer", "localhost:25571"
 			vmArgs "-Dnetherview.perf=true", "-Dnetherview.devCapture=true"
 		}
+		// Joins the Paper test server acting like a client without the mod (fallback views).
+		vanillaTestClient {
+			client()
+			name = "Vanilla-acting Test Client"
+			programArgs "--quickPlayMultiplayer", "localhost:25571"
+			vmArgs "-Dnetherview.actVanilla=true", "-Dnetherview.devCapture=true"
+		}
 		// Joins the mod's own dedicated server from runServer (port 25570).
 		fabricTestClient {
 			client()

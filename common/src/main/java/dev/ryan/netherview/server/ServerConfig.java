@@ -20,10 +20,15 @@ package dev.ryan.netherview.server;
  * @param seamlessTravel        whether players with the client mod cross linked portals by
  *                              walking through their plane (instant, momentum kept); off means
  *                              vanilla travel for everyone, the view is still shown
+ * @param fallbackViews         whether players without the client mod see through portals
+ *                              too, as fake blocks the server sends them (a copy of the far
+ *                              side behind the portal, only where they look through it)
+ * @param fallbackDepth         how far behind a portal (in blocks) that copy reaches; deeper
+ *                              shows more of the far side but sends more blocks
  */
 public record ServerConfig(int scanRadius, int streamedDestinations, int viewRadiusChunks, int chunksPerScan, double entityRadius, int maxPortalSize,
-		boolean tickDestination, boolean seamlessTravel) {
-	public static final ServerConfig DEFAULTS = new ServerConfig(24, 2, 4, 8, 24.0, 21, false, true);
+		boolean tickDestination, boolean seamlessTravel, boolean fallbackViews, int fallbackDepth) {
+	public static final ServerConfig DEFAULTS = new ServerConfig(24, 2, 4, 8, 24.0, 21, false, true, true, 16);
 
 	/** Clamps values to sane ranges so a bad config can't make the server do unbounded work. */
 	public ServerConfig {
@@ -33,5 +38,6 @@ public record ServerConfig(int scanRadius, int streamedDestinations, int viewRad
 		chunksPerScan = Math.clamp(chunksPerScan, 1, 64);
 		entityRadius = Math.clamp(entityRadius, 0.0, 64.0);
 		maxPortalSize = Math.clamp(maxPortalSize, 2, 21);
+		fallbackDepth = Math.clamp(fallbackDepth, 2, 48);
 	}
 }

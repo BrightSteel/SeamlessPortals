@@ -97,6 +97,10 @@ public final class PortalViewServer {
 	private PortalViewServer() {
 	}
 
+	static ServerConfig config() {
+		return config;
+	}
+
 	/** Called once by the platform (Fabric mod or Paper plugin) before the first tick. */
 	public static void init(PayloadSender payloadSender, ServerConfig serverConfig) {
 		sender = payloadSender;
@@ -141,6 +145,7 @@ public final class PortalViewServer {
 	public static void forget(ServerPlayer player) {
 		PLAYERS.remove(player.getUUID());
 		PortalWands.forget(player.getUUID());
+		FallbackWindows.forget(player);
 	}
 
 	private static void tickPlayers(MinecraftServer server) {
@@ -157,6 +162,12 @@ public final class PortalViewServer {
 		}
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (!sender.canReceive(player)) {
+				if (config.fallbackViews()) {
+					if (scan) {
+						FallbackWindows.setLinks(player, findLinks(server, player, now));
+					}
+					FallbackWindows.tick(server, player, now);
+				}
 				continue;
 			}
 			if (scan) {
@@ -309,7 +320,6 @@ public final class PortalViewServer {
 
 	private static void update(MinecraftServer server, ServerPlayer player, int now) {
 		PlayerState state = PLAYERS.computeIfAbsent(player.getUUID(), id -> new PlayerState());
-		List<PortalLink> links = new ArrayList<>();
 		ServerLevel level = player.level();
 		if (level.dimension() != state.streamedFrom) {
 			// A mod client drops every remote level when its own level changes (portal, /tp,
@@ -319,6 +329,23 @@ public final class PortalViewServer {
 			state.entities.clear();
 			state.streamedFrom = level.dimension();
 		}
+		List<PortalLink> links = findLinks(server, player, now);
+		if (!links.equals(state.links)) {
+			state.links = links;
+			sender.send(player, new PortalLinksPayload(links), PortalLinksPayload.STREAM_CODEC);
+		}
+		for (Map.Entry<String, List<Vec3>> entry : streamedCenters(links).entrySet()) {
+			ServerLevel dest = server.getLevel(ResourceKey.create(Registries.DIMENSION, Identifier.parse(entry.getKey())));
+			if (dest != null) {
+				sendChunks(player, state, dest, entry.getKey(), entry.getValue(), now);
+			}
+		}
+	}
+
+	/** The portals around the player they may see through, nearest first. */
+	private static List<PortalLink> findLinks(MinecraftServer server, ServerPlayer player, int now) {
+		List<PortalLink> links = new ArrayList<>();
+		ServerLevel level = player.level();
 		BlockPos center = player.blockPosition();
 		findNetherLinks(server, level, center, now, links);
 		findEndLinks(server, player, level, center, now, links);
@@ -330,16 +357,7 @@ public final class PortalViewServer {
 		}
 		links.sort(Comparator.comparingDouble(link ->
 				PortalGeometry.center(link.source()).distanceToSqr(player.position())));
-		if (!links.equals(state.links)) {
-			state.links = links;
-			sender.send(player, new PortalLinksPayload(links), PortalLinksPayload.STREAM_CODEC);
-		}
-		for (Map.Entry<String, List<Vec3>> entry : streamedCenters(links).entrySet()) {
-			ServerLevel dest = server.getLevel(ResourceKey.create(Registries.DIMENSION, Identifier.parse(entry.getKey())));
-			if (dest != null) {
-				sendChunks(player, state, dest, entry.getKey(), entry.getValue(), now);
-			}
-		}
+		return links;
 	}
 
 	private static void findNetherLinks(MinecraftServer server, ServerLevel level, BlockPos center, int now, List<PortalLink> out) {
