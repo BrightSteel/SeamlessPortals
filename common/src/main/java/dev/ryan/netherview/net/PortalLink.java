@@ -11,12 +11,14 @@ import net.minecraft.network.codec.StreamCodec;
 /**
  * One portal the player can see, paired with where it leads.
  *
- * <p>A portal is the rectangle of portal blocks: {@code min} is its lowest corner,
- * {@code width} runs along {@code axis} (X or Z) and {@code height} runs up Y.
- * The destination is described the same way, in {@code destDimension}.</p>
+ * <p>A portal is the rectangle of portal blocks: {@code min} is its lowest corner. For a
+ * nether portal ({@code axis} X or Z) {@code width} runs along the axis and {@code height}
+ * up Y; for an end portal ({@code axis} Y, lying flat) {@code width} runs along X and
+ * {@code height} along Z. The destination is described the same way, in {@code destDimension}
+ * (for an end portal it is a virtual opening just above where the player arrives).</p>
  *
  * <p>Wire format (kept to primitives so a non-Fabric server can write it):
- * long min, byte axis (0 = X, 1 = Z), varint width, varint height, utf8 destDimension,
+ * long min, byte axis (0 = X, 1 = Z, 2 = Y), varint width, varint height, utf8 destDimension,
  * long destMin, byte destAxis, varint destWidth, varint destHeight.</p>
  */
 public record PortalLink(
@@ -51,11 +53,19 @@ public record PortalLink(
 	}
 
 	private static int axisId(Direction.Axis axis) {
-		return axis == Direction.Axis.Z ? 1 : 0;
+		return switch (axis) {
+			case X -> 0;
+			case Z -> 1;
+			case Y -> 2;
+		};
 	}
 
 	private static Direction.Axis axisFromId(int id) {
-		return id == 1 ? Direction.Axis.Z : Direction.Axis.X;
+		return switch (id) {
+			case 1 -> Direction.Axis.Z;
+			case 2 -> Direction.Axis.Y;
+			default -> Direction.Axis.X;
+		};
 	}
 
 	/** Lets a plain {@link FriendlyByteBuf} writer (e.g. a plugin) produce the same bytes. */

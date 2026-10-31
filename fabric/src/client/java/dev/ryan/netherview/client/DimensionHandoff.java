@@ -104,6 +104,9 @@ public final class DimensionHandoff {
 		arrivalXRot = minecraft.player.getXRot();
 
 		PortalLink link = used.link();
+		if (geometry.horizontal()) {
+			return; // no portal where you land in the End (or at your spawn), so no way back to show
+		}
 		wayBack = new PortalLink(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight(),
 				minecraft.level.dimension().identifier().toString(), link.min(), link.axis(), link.width(), link.height());
 		wayBackDimension = minecraft.level.dimension();

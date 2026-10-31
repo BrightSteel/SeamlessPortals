@@ -42,6 +42,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.joml.Vector3fc;
@@ -241,7 +242,9 @@ public final class PortalViewRenderer {
 			return;
 		}
 		for (Link link : RemoteDimensions.links()) {
-			if (link.geometry().crossesSource(previous, eye) && RemoteDimensions.get(link.dest()) != null) {
+			// End portals are fallen into feet first: the server moves the player before the
+			// camera reaches the surface, so there is no crossing to preview.
+			if (!link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.get(link.dest()) != null) {
 				crossedLink = link;
 				crossedAt = Util.getMillis();
 				return;
@@ -289,7 +292,7 @@ public final class PortalViewRenderer {
 		List<Link> visible = new ArrayList<>();
 		for (Link link : RemoteDimensions.links()) {
 			if (frustum.isVisible(link.geometry().sourceBox().inflate(0.25))
-					&& minecraft.level.getBlockState(link.link().min()).is(Blocks.NETHER_PORTAL)) {
+					&& isPortal(minecraft.level.getBlockState(link.link().min()))) {
 				visible.add(link);
 			}
 		}
@@ -337,6 +340,10 @@ public final class PortalViewRenderer {
 			}
 		}
 		assignments = assigned;
+	}
+
+	private static boolean isPortal(BlockState state) {
+		return state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL);
 	}
 
 	/**
@@ -721,7 +728,10 @@ public final class PortalViewRenderer {
 			Vector4f fog = view.renderState.cameraRenderState.fogData.color;
 			return new Vector4f(fog.x, fog.y, fog.z, 1.0F);
 		}
-		return link.dest() == Level.NETHER ? new Vector4f(0.2F, 0.03F, 0.03F, 1.0F) : new Vector4f(0.62F, 0.75F, 1.0F, 1.0F);
+		if (link.dest() == Level.NETHER) {
+			return new Vector4f(0.2F, 0.03F, 0.03F, 1.0F);
+		}
+		return link.dest() == Level.END ? new Vector4f(0.04F, 0.03F, 0.06F, 1.0F) : new Vector4f(0.62F, 0.75F, 1.0F, 1.0F);
 	}
 
 	/**

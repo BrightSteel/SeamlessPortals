@@ -1,5 +1,6 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.net.PortalLink;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -35,6 +36,11 @@ public final class PortalHiding {
 		if (!state.is(Blocks.NETHER_PORTAL)) {
 			return false;
 		}
+		return remoteLevels.contains(level) ? hiddenInRemoteLevels.contains(pos) : hiddenInPlayerLevel.contains(pos);
+	}
+
+	/** Whether this end portal block belongs to a linked portal (player's level) or a link's destination (remote level). */
+	public static boolean hidesEndPortal(ClientLevel level, BlockPos pos) {
 		return remoteLevels.contains(level) ? hiddenInRemoteLevels.contains(pos) : hiddenInPlayerLevel.contains(pos);
 	}
 
@@ -90,10 +96,8 @@ public final class PortalHiding {
 	}
 
 	private static void addRect(Set<BlockPos> into, BlockPos min, Direction.Axis axis, int width, int height) {
-		for (int w = 0; w < width; w++) {
-			for (int h = 0; h < height; h++) {
-				into.add(min.relative(axis, w).above(h));
-			}
+		for (BlockPos pos : PortalGeometry.blocks(min, axis, width, height)) {
+			into.add(pos.immutable());
 		}
 	}
 

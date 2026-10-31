@@ -59,10 +59,11 @@ public final class NetherViewPlugin extends JavaPlugin implements Listener {
 		PortalViewServer.forget(((CraftPlayer) event.getPlayer()).getHandle());
 	}
 
-	/** Linked portals are crossed by walking through their plane; vanilla's touch-to-teleport is skipped for mod clients. */
+	/** Linked portals are crossed by going through their plane; vanilla's touch-to-teleport is skipped for mod clients. */
 	@EventHandler(ignoreCancelled = true)
 	public void onPortal(PlayerPortalEvent event) {
-		if (event.getCause() == PlayerTeleportEvent.TeleportCause.NETHER_PORTAL
+		PlayerTeleportEvent.TeleportCause cause = event.getCause();
+		if ((cause == PlayerTeleportEvent.TeleportCause.NETHER_PORTAL || cause == PlayerTeleportEvent.TeleportCause.END_PORTAL)
 				&& PortalViewServer.handlesTravel(((CraftPlayer) event.getPlayer()).getHandle())) {
 			event.setCancelled(true);
 		}

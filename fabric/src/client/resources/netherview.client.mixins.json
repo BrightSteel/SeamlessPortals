@@ -3,6 +3,7 @@
 	"package": "dev.ryan.netherview.client.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"AbstractEndPortalRendererMixin",
 		"CameraAccessor",
 		"ClientPacketListenerAccessor",
 		"ClientPacketListenerMixin",
