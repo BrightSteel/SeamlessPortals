@@ -426,7 +426,8 @@ public final class PortalViewRenderer {
 
 	/**
 	 * Gives each live portal a view of its destination dimension. A portal keeps last frame's
-	 * view when it can; the rest take free views, which are re-centred on their new destination.
+	 * view when it can (following its destination if that moved); the rest take free views,
+	 * which are re-centred on their new destination.
 	 */
 	private static Map<BlockPos, RemoteDimension> assignViews(List<Link> live) {
 		Map<BlockPos, RemoteDimension> assigned = new HashMap<>();
@@ -435,6 +436,8 @@ public final class PortalViewRenderer {
 		for (Link link : live) {
 			RemoteDimension previous = assignments.get(link.link().min());
 			if (previous != null && previous.key == link.dest() && !previous.isClosed() && used.add(previous)) {
+				// Same portal, but its destination can move (a random portal's next spot).
+				RemoteDimensions.recenter(previous, ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
 				assigned.put(link.link().min(), previous);
 			} else {
 				unassigned.add(link);

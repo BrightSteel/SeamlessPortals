@@ -6,6 +6,7 @@ import dev.ryan.netherview.net.PortalFill;
 import dev.ryan.netherview.server.CustomPortal;
 import dev.ryan.netherview.server.CustomPortalBlocks;
 import dev.ryan.netherview.server.CustomPortals;
+import dev.ryan.netherview.server.RandomDestinations;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.minecraft.core.BlockPos;
@@ -37,6 +38,7 @@ import java.util.regex.Pattern;
  * createat &lt;name&gt; &lt;world&gt; &lt;x1 y1 z1&gt; &lt;x2 y2 z2&gt; &lt;facing&gt; [up] [fill]
  * link &lt;a&gt; &lt;b&gt;                                two-way pair
  * target &lt;name&gt; here | &lt;world&gt; &lt;x y z&gt; [yaw] [pitch]   one-way
+ * target &lt;name&gt; random                       one-way to random spots in the portal's world
  * unlink &lt;name&gt; · fill &lt;name&gt; &lt;fill&gt; · public &lt;name&gt; &lt;true|false&gt;
  * delete &lt;name&gt; · list · info &lt;name&gt; · tp &lt;name&gt;
  * </pre>
@@ -89,6 +91,7 @@ final class PortalCommand implements TabExecutor {
 				/nvportal createat <name> <world> <x1 y1 z1> <x2 y2 z2> <facing> [up] [fill]
 				/nvportal link <a> <b> — two-way pair
 				/nvportal target <name> here | <world> <x y z> [yaw] [pitch] — one-way
+				/nvportal target <name> random — one-way to a new random spot in its world each trip
 				/nvportal unlink|delete|info|tp <name>, fill <name> <fill>, public <name> <true|false>, list
 				Fills: """ + String.join(", ", FILLS), NamedTextColor.GRAY));
 		return true;
@@ -201,6 +204,10 @@ final class PortalCommand implements TabExecutor {
 
 	private boolean target(CommandSender sender, String[] args) {
 		CustomPortal portal = existing(args, 1);
+		if (args.length == 3 && args[2].equalsIgnoreCase("random")) {
+			CustomPortals.setDestination(portal.name(), new CustomPortal.Destination.Random());
+			return ok(sender, "'" + portal.name() + "' now leads to random spots in " + portal.world() + ". It shows the next one once it's found.");
+		}
 		CustomPortal.Destination.Target target;
 		if (args.length > 2 && args[2].equalsIgnoreCase("here")) {
 			Player player = player(sender);
@@ -210,7 +217,7 @@ final class PortalCommand implements TabExecutor {
 			target = new CustomPortal.Destination.Target(worldId(world(args[2])), number(args[3]), number(args[4]), number(args[5]),
 					args.length > 6 ? (float) number(args[6]) : 0.0F, args.length > 7 ? (float) number(args[7]) : 0.0F);
 		} else {
-			throw new IllegalArgumentException("Usage: /nvportal target <name> here | <world> <x> <y> <z> [yaw] [pitch]");
+			throw new IllegalArgumentException("Usage: /nvportal target <name> here | random | <world> <x> <y> <z> [yaw] [pitch]");
 		}
 		CustomPortals.setDestination(portal.name(), target);
 		return ok(sender, "'" + portal.name() + "' now leads one-way to " + describe(target) + ".");
@@ -279,7 +286,7 @@ final class PortalCommand implements TabExecutor {
 				.append(Component.text("\n world " + portal.world() + ", corner " + end.min().toShortString()
 						+ "\n " + end.width() + "×" + end.height() + ", facing " + end.facing().getSerializedName() + ", up " + end.up().getSerializedName()
 						+ "\n fill " + end.fill().name().toLowerCase(Locale.ROOT) + ", " + (portal.isPublic() ? "public" : "private (netherview.portal." + portal.name() + ")")
-						+ "\n leads to " + describe(portal.destination()), NamedTextColor.GRAY)));
+						+ "\n leads to " + describe(portal.destination()) + nextSpot(portal), NamedTextColor.GRAY)));
 		return true;
 	}
 
@@ -310,8 +317,19 @@ final class PortalCommand implements TabExecutor {
 			case CustomPortal.Destination.Portal(String name) -> "'" + name + "' (two-way)";
 			case CustomPortal.Destination.Target(String world, double x, double y, double z, float yaw, float pitch) ->
 					String.format(Locale.ROOT, "%s %.1f %.1f %.1f (one-way)", world, x, y, z);
+			case CustomPortal.Destination.Random() -> "random spots in its world (one-way)";
 			case CustomPortal.Destination.None() -> "nowhere yet";
 		};
+	}
+
+	private static String nextSpot(CustomPortal portal) {
+		if (!(portal.destination() instanceof CustomPortal.Destination.Random)) {
+			return "";
+		}
+		RandomDestinations.Spot spot = RandomDestinations.peek(portal.name());
+		return spot == null
+				? "\n no spot ready yet"
+				: String.format(Locale.ROOT, "\n next %.1f %.1f %.1f, %d queued", spot.x(), spot.y(), spot.z(), RandomDestinations.queued(portal.name()));
 	}
 
 	private static int extent(BlockPos min, BlockPos max, Direction.Axis axis) {
@@ -429,7 +447,7 @@ final class PortalCommand implements TabExecutor {
 				case "create" -> FILLS;
 				case "createat" -> worlds;
 				case "link" -> names;
-				case "target" -> concat(List.of("here"), worlds);
+				case "target" -> concat(List.of("here", "random"), worlds);
 				case "fill" -> FILLS;
 				case "public" -> List.of("true", "false");
 				default -> List.of();

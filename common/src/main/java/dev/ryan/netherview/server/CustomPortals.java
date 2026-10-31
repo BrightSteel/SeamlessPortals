@@ -147,7 +147,8 @@ public final class CustomPortals {
 	 * The link a portal stands for, or null if it leads nowhere usable (not linked, or its
 	 * destination's world isn't loaded). A pair links to the other portal's opening; a target
 	 * to a virtual upright opening of the same size standing at the target, facing its yaw
-	 * (to the nearest side: portal frames are block-aligned).
+	 * (to the nearest side: portal frames are block-aligned). A random portal is a target at
+	 * the head of its queue, or null until one is ready.
 	 */
 	public static PortalLink link(MinecraftServer server, CustomPortal portal) {
 		switch (portal.destination()) {
@@ -157,26 +158,34 @@ public final class CustomPortals {
 				return dest == null ? null : new PortalLink(portal.end(), partner.world(), PortalViewServer.dimensionTypeId(dest), partner.end());
 			}
 			case CustomPortal.Destination.Target(String world, double x, double y, double z, float yaw, float pitch) -> {
-				ServerLevel dest = level(server, world);
-				if (dest == null) {
-					return null;
-				}
-				Direction facing = Direction.fromYRot(yaw);
-				int width = portal.end().width();
-				int height = portal.end().height();
-				Direction right = new PortalEnd(BlockPos.ZERO, facing, Direction.UP, width, height, 8, PortalFill.NONE).right();
-				// Centred on the target along its width, standing on the target's block.
-				BlockPos targetBlock = BlockPos.containing(x, y, z);
-				int start = (int) Math.floor((right.getAxis() == Direction.Axis.X ? x : z) - width / 2.0 + 0.5);
-				BlockPos min = right.getAxis() == Direction.Axis.X
-						? new BlockPos(start, targetBlock.getY(), targetBlock.getZ())
-						: new BlockPos(targetBlock.getX(), targetBlock.getY(), start);
-				return new PortalLink(portal.end(), world, PortalViewServer.dimensionTypeId(dest),
-						new PortalEnd(min, facing, Direction.UP, width, height, 8, PortalFill.NONE));
+				return targetLink(server, portal, world, x, y, z, yaw);
+			}
+			case CustomPortal.Destination.Random() -> {
+				RandomDestinations.Spot spot = RandomDestinations.peek(portal.name());
+				return spot == null ? null : targetLink(server, portal, portal.world(), spot.x(), spot.y(), spot.z(), spot.yaw());
 			}
 			case CustomPortal.Destination.None() -> {
 				return null;
 			}
 		}
+	}
+
+	private static PortalLink targetLink(MinecraftServer server, CustomPortal portal, String world, double x, double y, double z, float yaw) {
+		ServerLevel dest = level(server, world);
+		if (dest == null) {
+			return null;
+		}
+		Direction facing = Direction.fromYRot(yaw);
+		int width = portal.end().width();
+		int height = portal.end().height();
+		Direction right = new PortalEnd(BlockPos.ZERO, facing, Direction.UP, width, height, 8, PortalFill.NONE).right();
+		// Centred on the target along its width, standing on the target's block.
+		BlockPos targetBlock = BlockPos.containing(x, y, z);
+		int start = (int) Math.floor((right.getAxis() == Direction.Axis.X ? x : z) - width / 2.0 + 0.5);
+		BlockPos min = right.getAxis() == Direction.Axis.X
+				? new BlockPos(start, targetBlock.getY(), targetBlock.getZ())
+				: new BlockPos(targetBlock.getX(), targetBlock.getY(), start);
+		return new PortalLink(portal.end(), world, PortalViewServer.dimensionTypeId(dest),
+				new PortalEnd(min, facing, Direction.UP, width, height, 8, PortalFill.NONE));
 	}
 }

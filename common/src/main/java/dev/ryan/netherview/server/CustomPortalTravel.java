@@ -59,6 +59,7 @@ final class CustomPortalTravel {
 			boolean onContact = portal.end().fill() == PortalFill.LAVA;
 			// Lava hurts on touch, so it sends on touch: against the whole fill blocks, not the plane.
 			AABB fillBlocks = onContact ? fillBox(portal) : opening;
+			boolean playerSent = false;
 			for (Entity entity : level.getEntities((Entity) null, opening.inflate(WATCH_MARGIN), e -> e.isAlive() && !e.isPassenger())) {
 				UUID id = entity.getUUID();
 				seen.add(id);
@@ -73,7 +74,13 @@ final class CustomPortalTravel {
 				if (!through || entity instanceof ServerPlayer player && !CustomPortals.canUse(player, portal)) {
 					continue;
 				}
+				playerSent |= entity instanceof ServerPlayer || entity.hasPassenger(passenger -> passenger instanceof ServerPlayer);
 				send(server, entity, link, geometry, onContact);
+			}
+			if (playerSent && portal.destination() instanceof CustomPortal.Destination.Random) {
+				// Only a player's trip uses up the spot (mobs and items just follow it there);
+				// everything that went through this tick shares it.
+				RandomDestinations.advance(portal.name());
 			}
 		}
 		LAST.keySet().retainAll(seen);

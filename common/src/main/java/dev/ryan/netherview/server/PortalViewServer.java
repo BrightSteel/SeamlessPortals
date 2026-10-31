@@ -144,6 +144,7 @@ public final class PortalViewServer {
 
 	private static void tickPlayers(MinecraftServer server) {
 		CustomPortalTravel.tick(server);
+		RandomDestinations.tick(server);
 		if (server.getTickCount() % CustomPortalBlocks.REPAIR_INTERVAL == 0) {
 			CustomPortalBlocks.repair(server);
 		}

@@ -35,5 +35,12 @@ public record CustomPortal(String name, String world, PortalEnd end, Destination
 		/** One-way: a fixed spot, arriving facing {@code yaw}. */
 		record Target(String world, double x, double y, double z, float yaw, float pitch) implements Destination {
 		}
+
+		/**
+		 * One-way to a random safe spot in the portal's own world. The portal shows the next
+		 * spot of its own queue ({@link RandomDestinations}) and each trip uses it up.
+		 */
+		record Random() implements Destination {
+		}
 	}
 }

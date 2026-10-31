@@ -65,6 +65,7 @@ final class PortalStore {
 					section.set("destination.yaw", yaw);
 					section.set("destination.pitch", pitch);
 				}
+				case CustomPortal.Destination.Random() -> section.set("destination.random", true);
 				case CustomPortal.Destination.None() -> {
 				}
 			}
@@ -86,6 +87,8 @@ final class PortalStore {
 		CustomPortal.Destination destination = new CustomPortal.Destination.None();
 		if (section.isString("destination.portal")) {
 			destination = new CustomPortal.Destination.Portal(section.getString("destination.portal"));
+		} else if (section.getBoolean("destination.random")) {
+			destination = new CustomPortal.Destination.Random();
 		} else if (section.isString("destination.world")) {
 			List<Double> pos = section.getDoubleList("destination.position");
 			destination = new CustomPortal.Destination.Target(section.getString("destination.world"), pos.get(0), pos.get(1), pos.get(2),
