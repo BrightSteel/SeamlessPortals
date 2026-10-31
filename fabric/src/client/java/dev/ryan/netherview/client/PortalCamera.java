@@ -6,6 +6,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 /**
  * A camera on the far side of a portal. Instead of following an entity, it is placed
@@ -14,8 +16,8 @@ import org.joml.Matrix4f;
  */
 public final class PortalCamera extends Camera {
 
-	public void place(Camera main, ClientLevel level, Vec3 position, float yRot, float xRot) {
-		this.place(main, level, position, yRot, xRot, null);
+	public void place(Camera main, ClientLevel level, Vec3 position, Quaternionf orientation) {
+		this.place(main, level, position, orientation, null);
 	}
 
 	/**
@@ -23,7 +25,7 @@ public final class PortalCamera extends Camera {
 	 *                       (e.g. narrowed to a portal's part of the screen); otherwise the
 	 *                       camera's usual one
 	 */
-	public void place(Camera main, ClientLevel level, Vec3 position, float yRot, float xRot, Matrix4f cullProjection) {
+	public void place(Camera main, ClientLevel level, Vec3 position, Quaternionf orientation, Matrix4f cullProjection) {
 		Minecraft minecraft = Minecraft.getInstance();
 		CameraAccessor self = (CameraAccessor) (Object) this;
 		CameraAccessor mainLens = (CameraAccessor) main;
@@ -37,7 +39,14 @@ public final class PortalCamera extends Camera {
 		self.netherview$setHudFov(mainLens.netherview$getHudFov());
 		self.netherview$setDepthFar(mainLens.netherview$getDepthFar());
 
-		this.setRotation(yRot, xRot);
+		// Yaw and pitch for whatever reads them; then the exact orientation, which a portal pair
+		// can roll (wall to floor), so the image lines up with the player's view.
+		Vector3f forward = new Vector3f(0.0F, 0.0F, -1.0F).rotate(orientation);
+		this.setRotation((float) Math.toDegrees(Math.atan2(-forward.x, forward.z)), (float) Math.toDegrees(Math.asin(Math.clamp(-forward.y, -1.0F, 1.0F))));
+		this.rotation().set(orientation);
+		((Vector3f) this.forwardVector()).set(0.0F, 0.0F, -1.0F).rotate(orientation);
+		((Vector3f) this.upVector()).set(0.0F, 1.0F, 0.0F).rotate(orientation);
+		((Vector3f) this.leftVector()).set(-1.0F, 0.0F, 0.0F).rotate(orientation);
 		this.setPosition(position);
 
 		self.netherview$prepareCullFrustum(this.getViewRotationMatrix(new Matrix4f()),

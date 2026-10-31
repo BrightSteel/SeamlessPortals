@@ -1,6 +1,8 @@
 package dev.ryan.netherview.server;
 
 import dev.ryan.netherview.PortalGeometry;
+import dev.ryan.netherview.net.PortalEnd;
+import dev.ryan.netherview.net.PortalFill;
 import dev.ryan.netherview.net.PortalLink;
 import dev.ryan.netherview.net.PortalLinksPayload;
 import dev.ryan.netherview.net.PortalTravelPayload;
@@ -101,6 +103,22 @@ public final class PortalViewServer {
 		config = serverConfig;
 	}
 
+	/**
+	 * A player is about to be moved through a portal: tell their client (if modded) which pair,
+	 * so it can hand its preloaded view over, and drop the links of the side being left.
+	 */
+	static void announceTravel(ServerPlayer player, PortalLink link) {
+		if (!sender.canReceive(player)) {
+			return;
+		}
+		PlayerState state = PLAYERS.get(player.getUUID());
+		if (state != null) {
+			state.links = List.of();
+			state.lastEye = null;
+		}
+		sender.send(player, new PortalTravelPayload(link), PortalTravelPayload.STREAM_CODEC);
+	}
+
 	public static void tick(MinecraftServer server) {
 		if (!PERF) {
 			tickPlayers(server);
@@ -125,6 +143,10 @@ public final class PortalViewServer {
 	}
 
 	private static void tickPlayers(MinecraftServer server) {
+		CustomPortalTravel.tick(server);
+		if (server.getTickCount() % CustomPortalBlocks.REPAIR_INTERVAL == 0) {
+			CustomPortalBlocks.repair(server);
+		}
 		int now = server.getTickCount();
 		boolean scan = now % SCAN_INTERVAL_TICKS == 0;
 		if (scan) {
@@ -159,7 +181,7 @@ public final class PortalViewServer {
 		}
 		Vec3 center = Vec3.atCenterOf(pos);
 		for (PortalLink link : state.links) {
-			if (seamless(player.level(), link) && PortalGeometry.box(link.min(), link.axis(), link.width(), link.height()).contains(center)) {
+			if (seamless(player.level(), link) && PortalGeometry.box(link.source()).contains(center)) {
 				return true;
 			}
 		}
@@ -182,7 +204,7 @@ public final class PortalViewServer {
 	 * follows vanilla's respawn rules.
 	 */
 	private static boolean seamless(Level level, PortalLink link) {
-		return link.axis() != Direction.Axis.Y || level.dimension() != Level.END;
+		return link.source().facing().getAxis() != Direction.Axis.Y || level.dimension() != Level.END;
 	}
 
 	/**
@@ -215,8 +237,8 @@ public final class PortalViewServer {
 		for (PortalLink link : state.links) {
 			PortalGeometry geometry = PortalGeometry.of(link);
 			boolean crossed = geometry.horizontal() ? geometry.crossesSource(lastFeet, feet) : geometry.crossesSource(lastEye, eye);
-			if (!crossed || !seamless(level, link)) {
-				continue;
+			if (!crossed || !seamless(level, link) || CustomPortals.at(level, link.min()) != null) {
+				continue; // custom portals are travelled by CustomPortalTravel, for everyone
 			}
 			ServerLevel dest = server.getLevel(ResourceKey.create(Registries.DIMENSION, Identifier.parse(link.destDimension())));
 			if (dest == null) {
@@ -229,12 +251,12 @@ public final class PortalViewServer {
 			geometry = PortalGeometry.of(target);
 			Vec3 destFeet = geometry.toDest(feet);
 			Vec3 velocity = geometry.rotate(player.getDeltaMovement());
-			float yRot = geometry.toDestYaw(player.getYRot());
+			float[] rotation = geometry.toDestRotation(player.getYRot(), player.getXRot());
 			state.lastEye = null;
 			// These links belong to the dimension being left; the next scan sends the new ones.
 			state.links = List.of();
 			sender.send(player, new PortalTravelPayload(target), PortalTravelPayload.STREAM_CODEC);
-			player.teleport(new TeleportTransition(dest, destFeet, velocity, yRot, player.getXRot(),
+			player.teleport(new TeleportTransition(dest, destFeet, velocity, rotation[0], rotation[1],
 					TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET)));
 			// Arriving just past the destination plane may still overlap its portal blocks; the
 			// cooldown keeps vanilla from sending the player straight back.
@@ -270,8 +292,8 @@ public final class PortalViewServer {
 			destAxis = dest.getBlockState(rect.minCorner).getValue(NetherPortalBlock.AXIS);
 		}
 		DESTINATIONS.remove(new DestKey(level.dimension(), link.min(), link.axis(), link.width(), link.height(), null));
-		return new PortalLink(link.min(), link.axis(), link.width(), link.height(),
-				link.destDimension(), rect.minCorner, destAxis, rect.axis1Size, rect.axis2Size);
+		return new PortalLink(link.source(), link.destDimension(), link.destDimensionType(),
+				netherDest(link.source(), rect.minCorner, destAxis, rect.axis1Size, rect.axis2Size, PortalFill.NETHER_PORTAL));
 	}
 
 	/** Into the End: build the spawn platform exactly as vanilla does on arrival. The link already points above it. */
@@ -286,11 +308,25 @@ public final class PortalViewServer {
 		PlayerState state = PLAYERS.computeIfAbsent(player.getUUID(), id -> new PlayerState());
 		List<PortalLink> links = new ArrayList<>();
 		ServerLevel level = player.level();
+		if (level.dimension() != state.streamedFrom) {
+			// A mod client drops every remote level when its own level changes (portal, /tp,
+			// respawn), so nothing sent before counts any more: start streaming afresh.
+			state.sentChunkHashes.clear();
+			state.lastFullCheck.clear();
+			state.entities.clear();
+			state.streamedFrom = level.dimension();
+		}
 		BlockPos center = player.blockPosition();
 		findNetherLinks(server, level, center, now, links);
 		findEndLinks(server, player, level, center, now, links);
+		for (CustomPortal portal : CustomPortals.near(level, player.position(), config.scanRadius())) {
+			PortalLink link = CustomPortals.canUse(player, portal) ? CustomPortals.link(server, portal) : null;
+			if (link != null && portal.end().width() <= config.maxPortalSize() && portal.end().height() <= config.maxPortalSize()) {
+				links.add(link);
+			}
+		}
 		links.sort(Comparator.comparingDouble(link ->
-				PortalGeometry.center(link.min(), link.axis(), link.width(), link.height()).distanceToSqr(player.position())));
+				PortalGeometry.center(link.source()).distanceToSqr(player.position())));
 		if (!links.equals(state.links)) {
 			state.links = links;
 			sender.send(player, new PortalLinksPayload(links), PortalLinksPayload.STREAM_CODEC);
@@ -320,13 +356,13 @@ public final class PortalViewServer {
 				continue;
 			}
 			BlockState state = level.getBlockState(pos);
-			if (!state.is(Blocks.NETHER_PORTAL)) {
-				continue;
+			if (!state.is(Blocks.NETHER_PORTAL) || CustomPortals.at(level, pos) != null) {
+				continue; // custom portals' nether portal blocks are theirs, not vanilla portals
 			}
 			Direction.Axis axis = state.getValue(NetherPortalBlock.AXIS);
 			BlockUtil.FoundRectangle rect = BlockUtil.getLargestRectangleAround(
-					pos, axis, 21, Direction.Axis.Y, 21, p -> level.getBlockState(p) == state);
-			PortalGeometry.blocks(rect.minCorner, axis, rect.axis1Size, rect.axis2Size).forEach(p -> covered.add(p.immutable()));
+					pos, axis, 21, Direction.Axis.Y, 21, p -> level.getBlockState(p) == state && CustomPortals.at(level, p) == null);
+			PortalEnd.netherPortal(rect.minCorner, axis, rect.axis1Size, rect.axis2Size, PortalFill.NETHER_PORTAL).blocks().forEach(p -> covered.add(p.immutable()));
 			if (tooBig(rect)) {
 				continue; // too big to show through: stays a vanilla portal
 			}
@@ -358,12 +394,12 @@ public final class PortalViewServer {
 					BlockPos pos = blockEntity.getBlockPos();
 					// End gateways share this block entity class; only real end portals count.
 					if (!(blockEntity instanceof TheEndPortalBlockEntity) || covered.contains(pos) || pos.distSqr(center) > radiusSqr
-							|| !level.getBlockState(pos).is(Blocks.END_PORTAL)) {
+							|| !level.getBlockState(pos).is(Blocks.END_PORTAL) || CustomPortals.at(level, pos) != null) {
 						continue;
 					}
 					BlockUtil.FoundRectangle rect = BlockUtil.getLargestRectangleAround(
-							pos, Direction.Axis.X, 21, Direction.Axis.Z, 21, p -> level.getBlockState(p).is(Blocks.END_PORTAL));
-					PortalGeometry.blocks(rect.minCorner, Direction.Axis.Y, rect.axis1Size, rect.axis2Size).forEach(p -> covered.add(p.immutable()));
+							pos, Direction.Axis.X, 21, Direction.Axis.Z, 21, p -> level.getBlockState(p).is(Blocks.END_PORTAL) && CustomPortals.at(level, p) == null);
+					PortalEnd.endPortal(rect.minCorner, rect.axis1Size, rect.axis2Size, PortalFill.END_PORTAL).blocks().forEach(p -> covered.add(p.immutable()));
 					if (tooBig(rect)) {
 						continue;
 					}
@@ -388,11 +424,13 @@ public final class PortalViewServer {
 			return cached.link;
 		}
 
-		Vec3 center = PortalGeometry.center(rect.minCorner, axis, rect.axis1Size, rect.axis2Size);
+		PortalEnd source = PortalEnd.netherPortal(rect.minCorner, axis, rect.axis1Size, rect.axis2Size, PortalFill.NETHER_PORTAL);
+		Vec3 center = PortalGeometry.center(source);
 		double scale = DimensionType.getTeleportationScale(level.dimensionType(), dest.dimensionType());
 		WorldBorder border = dest.getWorldBorder();
 		BlockPos approx = border.clampToBounds(center.x * scale, center.y, center.z * scale);
 		String destId = dest.dimension().identifier().toString();
+		String destType = dimensionTypeId(dest);
 
 		// The platform's own portal search (vanilla on Fabric, Paper's optimised lookup on
 		// Paper), so the view points at exactly the portal a real trip would use. It can load
@@ -415,8 +453,8 @@ public final class PortalViewServer {
 			Direction.Axis destAxis = destState.getValue(NetherPortalBlock.AXIS);
 			BlockUtil.FoundRectangle destRect = BlockUtil.getLargestRectangleAround(
 					pos, destAxis, 21, Direction.Axis.Y, 21, p -> dest.getBlockState(p) == destState);
-			link = new PortalLink(rect.minCorner, axis, rect.axis1Size, rect.axis2Size,
-					destId, destRect.minCorner, destAxis, destRect.axis1Size, destRect.axis2Size);
+			link = new PortalLink(source, destId, destType,
+					netherDest(source, destRect.minCorner, destAxis, destRect.axis1Size, destRect.axis2Size, PortalFill.NETHER_PORTAL));
 			DESTINATIONS.put(key, new CachedDest(link, now + FOUND_DEST_CACHE_TICKS));
 		} else {
 			// No portal yet: show the area a new one would be built around, same size and facing.
@@ -424,8 +462,7 @@ public final class PortalViewServer {
 			int maxY = dest.getMinY() + dest.getLogicalHeight() - rect.axis2Size - 1;
 			int y = Math.clamp(approx.getY() - rect.axis2Size / 2, minY, Math.max(minY, maxY));
 			BlockPos destMin = new BlockPos(approx.getX(), y, approx.getZ()).relative(axis, -rect.axis1Size / 2);
-			link = new PortalLink(rect.minCorner, axis, rect.axis1Size, rect.axis2Size,
-					destId, destMin, axis, rect.axis1Size, rect.axis2Size);
+			link = new PortalLink(source, destId, destType, netherDest(source, destMin, axis, rect.axis1Size, rect.axis2Size, PortalFill.NONE));
 			DESTINATIONS.put(key, new CachedDest(link, now + VIRTUAL_DEST_CACHE_TICKS));
 		}
 		return link;
@@ -458,16 +495,31 @@ public final class PortalViewServer {
 			destKey = Level.END;
 			arrival = END_ARRIVAL;
 		}
-		if (server.getLevel(destKey) == null) {
+		ServerLevel destLevel = server.getLevel(destKey);
+		if (destLevel == null) {
 			return null;
 		}
 		double planeY = arrival.y + END_DROP;
 		BlockPos destMin = BlockPos.containing(
 				arrival.x - rect.axis1Size / 2.0, planeY - PortalGeometry.END_PORTAL_SURFACE, arrival.z - rect.axis2Size / 2.0);
-		PortalLink link = new PortalLink(rect.minCorner, Direction.Axis.Y, rect.axis1Size, rect.axis2Size,
-				destKey.identifier().toString(), destMin, Direction.Axis.Y, rect.axis1Size, rect.axis2Size);
+		PortalLink link = new PortalLink(PortalEnd.endPortal(rect.minCorner, rect.axis1Size, rect.axis2Size, PortalFill.END_PORTAL),
+				destKey.identifier().toString(), dimensionTypeId(destLevel),
+				new PortalEnd(destMin, Direction.DOWN, Direction.SOUTH, rect.axis1Size, rect.axis2Size, 12, PortalFill.NONE));
 		DESTINATIONS.put(key, new CachedDest(link, now + (fromEnd ? VIRTUAL_DEST_CACHE_TICKS : FOUND_DEST_CACHE_TICKS)));
 		return link;
+	}
+
+	/**
+	 * The far end of a nether portal link, facing so that walking through keeps your heading:
+	 * straight through when both portals share an axis, turned 90° when they don't (as vanilla).
+	 */
+	private static PortalEnd netherDest(PortalEnd source, BlockPos min, Direction.Axis destAxis, int width, int height, PortalFill fill) {
+		Direction carried = source.axis() == destAxis ? source.facing() : source.facing().getClockWise();
+		return new PortalEnd(min, carried.getOpposite(), Direction.UP, width, height, 8, fill);
+	}
+
+	public static String dimensionTypeId(ServerLevel level) {
+		return level.dimensionTypeRegistration().unwrapKey().map(key -> key.identifier().toString()).orElse("minecraft:overworld");
 	}
 
 	// ── streaming ───────────────────────────────────────────────────────────
@@ -481,7 +533,7 @@ public final class PortalViewServer {
 		Map<String, List<Vec3>> byDimension = new LinkedHashMap<>();
 		int count = 0;
 		for (PortalLink link : links) {
-			Vec3 center = PortalGeometry.center(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight());
+			Vec3 center = PortalGeometry.center(link.dest());
 			List<Vec3> centers = byDimension.computeIfAbsent(link.destDimension(), d -> new ArrayList<>());
 			if (centers.stream().noneMatch(c -> c.distanceToSqr(center) < 16 * 16)) {
 				centers.add(center);
@@ -619,6 +671,8 @@ public final class PortalViewServer {
 		Vec3 lastEye;
 		Vec3 lastFeet;
 		ResourceKey<Level> lastDimension;
+		/** The player's dimension when remote data was last streamed. */
+		ResourceKey<Level> streamedFrom;
 	}
 
 	/** A source portal; {@code player} is set for destinations that depend on who goes through (the End's exit). */

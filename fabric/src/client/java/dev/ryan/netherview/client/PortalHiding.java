@@ -1,13 +1,11 @@
 package dev.ryan.netherview.client;
 
-import dev.ryan.netherview.PortalGeometry;
-import dev.ryan.netherview.net.PortalLink;
+import dev.ryan.netherview.net.PortalEnd;
+import dev.ryan.netherview.net.PortalFill;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 
@@ -28,20 +26,25 @@ public final class PortalHiding {
 	private static volatile Set<BlockPos> hiddenInPlayerLevel = Set.of();
 	private static volatile Set<BlockPos> hiddenInRemoteLevels = Set.of();
 	private static volatile Set<ClientLevel> remoteLevels = Set.of();
+	/** End portal / gateway blocks of over-budget links: drawn as vanilla (their starfield is per frame, no re-mesh). */
+	private static volatile Set<BlockPos> unhiddenEndPortals = Set.of();
 
 	private PortalHiding() {
 	}
 
 	public static boolean shouldHide(ClientLevel level, BlockState state, BlockPos pos) {
-		if (!state.is(Blocks.NETHER_PORTAL)) {
-			return false;
-		}
 		return remoteLevels.contains(level) ? hiddenInRemoteLevels.contains(pos) : hiddenInPlayerLevel.contains(pos);
 	}
 
 	/** Whether this end portal block belongs to a linked portal (player's level) or a link's destination (remote level). */
 	public static boolean hidesEndPortal(ClientLevel level, BlockPos pos) {
-		return remoteLevels.contains(level) ? hiddenInRemoteLevels.contains(pos) : hiddenInPlayerLevel.contains(pos);
+		return remoteLevels.contains(level) ? hiddenInRemoteLevels.contains(pos) : hiddenInPlayerLevel.contains(pos) && !unhiddenEndPortals.contains(pos);
+	}
+
+	static void setUnhiddenEndPortals(Set<BlockPos> blocks) {
+		if (!blocks.equals(unhiddenEndPortals)) {
+			unhiddenEndPortals = Set.copyOf(blocks);
+		}
 	}
 
 	/** Whether any block the entity overlaps belongs to a portal with a live view. */
@@ -67,8 +70,9 @@ public final class PortalHiding {
 	static void setLinks(List<RemoteDimensions.Link> links) {
 		Set<BlockPos> nextRemote = new HashSet<>();
 		for (RemoteDimensions.Link link : links) {
-			PortalLink portal = link.link();
-			addRect(nextRemote, portal.destMin(), portal.destAxis(), portal.destWidth(), portal.destHeight());
+			if (link.link().dest().fill() != PortalFill.NONE) {
+				addEnd(nextRemote, link.link().dest()); // a virtual destination has nothing to hide
+			}
 		}
 		Set<BlockPos> previousRemote = hiddenInRemoteLevels;
 		if (!nextRemote.equals(previousRemote)) {
@@ -78,8 +82,7 @@ public final class PortalHiding {
 
 		Set<BlockPos> next = new HashSet<>();
 		for (RemoteDimensions.Link link : links) {
-			PortalLink portal = link.link();
-			addRect(next, portal.min(), portal.axis(), portal.width(), portal.height());
+			addEnd(next, link.link().source());
 		}
 		Set<BlockPos> previous = hiddenInPlayerLevel;
 		if (next.equals(previous)) {
@@ -95,8 +98,8 @@ public final class PortalHiding {
 		}
 	}
 
-	private static void addRect(Set<BlockPos> into, BlockPos min, Direction.Axis axis, int width, int height) {
-		for (BlockPos pos : PortalGeometry.blocks(min, axis, width, height)) {
+	private static void addEnd(Set<BlockPos> into, PortalEnd end) {
+		for (BlockPos pos : end.blocks()) {
 			into.add(pos.immutable());
 		}
 	}

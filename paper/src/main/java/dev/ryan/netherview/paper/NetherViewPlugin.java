@@ -4,6 +4,7 @@ import dev.ryan.netherview.net.PortalLinksPayload;
 import dev.ryan.netherview.net.PortalTravelPayload;
 import dev.ryan.netherview.net.RemoteChunkPayload;
 import dev.ryan.netherview.net.RemoteEntitiesPayload;
+import dev.ryan.netherview.server.CustomPortals;
 import dev.ryan.netherview.server.PayloadSender;
 import dev.ryan.netherview.server.PortalViewServer;
 import dev.ryan.netherview.server.ServerConfig;
@@ -50,7 +51,17 @@ public final class NetherViewPlugin extends JavaPlugin implements Listener {
 				this.getConfig().getInt("max-portal-size", defaults.maxPortalSize()),
 				this.getConfig().getBoolean("tick-destination", defaults.tickDestination()),
 				this.getConfig().getBoolean("seamless-travel", defaults.seamlessTravel())));
+		PortalStore store = new PortalStore(this);
+		CustomPortals.init((player, portal) -> player.getBukkitEntity().hasPermission("netherview.portal." + portal.name())
+				|| player.getBukkitEntity().hasPermission("netherview.portal.*"), store::save);
+		store.load();
+		PortalWand wand = new PortalWand(this);
+		PortalCommand command = new PortalCommand(wand);
+		this.getCommand("nvportal").setExecutor(command);
+		this.getCommand("nvportal").setTabCompleter(command);
 		this.getServer().getPluginManager().registerEvents(this, this);
+		this.getServer().getPluginManager().registerEvents(wand, this);
+		this.getServer().getPluginManager().registerEvents(new PortalProtection(), this);
 		this.getServer().getScheduler().runTaskTimer(this, () -> PortalViewServer.tick(MinecraftServer.getServer()), 1L, 1L);
 	}
 

@@ -15,6 +15,8 @@ import net.minecraft.client.renderer.fog.FogRenderer;
 import net.minecraft.client.renderer.state.LightmapRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.Identifier;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -65,7 +67,7 @@ public final class RemoteDimension implements AutoCloseable {
 	private boolean probePrimed;
 	private boolean closed;
 
-	RemoteDimension(Minecraft minecraft, ResourceKey<Level> key) {
+	RemoteDimension(Minecraft minecraft, ResourceKey<Level> key, String dimensionTypeId) {
 		this.key = key;
 		int width = minecraft.getWindow().getWidth();
 		int height = minecraft.getWindow().getHeight();
@@ -85,7 +87,13 @@ public final class RemoteDimension implements AutoCloseable {
 		this.extractor = new LevelExtractor(minecraft, this.renderState, this.renderer);
 
 		ClientPacketListener connection = minecraft.getConnection();
-		Holder<DimensionType> type = connection.registryAccess().lookupOrThrow(Registries.DIMENSION_TYPE).getOrThrow(dimensionType(key));
+		// The type the server named for this world (any datapack or plugin-made world), else a guess from its name.
+		Registry<DimensionType> types = connection.registryAccess().lookupOrThrow(Registries.DIMENSION_TYPE);
+		Holder<DimensionType> type = dimensionTypeId == null ? null
+				: types.get(ResourceKey.create(Registries.DIMENSION_TYPE, Identifier.parse(dimensionTypeId))).orElse(null);
+		if (type == null) {
+			type = types.getOrThrow(dimensionType(key));
+		}
 		ClientLevel.ClientLevelData data = new ClientLevel.ClientLevelData(minecraft.level.getDifficulty(), false, false);
 		this.level = new ClientLevel(connection, data, key, type, CHUNK_RADIUS, CHUNK_RADIUS, this.extractor, false, 0L,
 				key == Level.NETHER ? 32 : 63);

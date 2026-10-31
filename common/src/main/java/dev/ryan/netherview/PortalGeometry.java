@@ -1,97 +1,108 @@
 package dev.ryan.netherview;
 
+import dev.ryan.netherview.net.PortalEnd;
 import dev.ryan.netherview.net.PortalLink;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Vec3i;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix3d;
+import org.joml.Quaterniond;
+import org.joml.Quaternionf;
+import org.joml.Vector3d;
 
 /**
- * The rigid transform that carries a point from the near side of a portal to the far side:
- * translate so the portal centres coincide, and turn 90° about Y when the two portals face
- * different axes (the same turn vanilla applies to a player who walks through).
+ * The rigid transform that carries a point from the near side of a portal to the far side.
  *
- * <p>Two kinds of opening:</p>
- * <ul>
- *   <li><b>Vertical</b> (nether portals, axis X or Z): {@code width} runs along the axis,
- *       {@code height} up Y, and the opening's plane is the middle of the portal blocks.</li>
- *   <li><b>Horizontal</b> (end portals, axis Y): {@code width} runs along X, {@code height}
- *       along Z, and the plane is the top of the end portal surface, 0.75 into the block.</li>
- * </ul>
+ * <p>Each end has a frame: right, up and facing (its normal, pointing out of its front). Going
+ * in through the source's front brings you out of the destination's front with "up" kept as
+ * "up": the rotation maps the source's -facing to the destination's +facing, up to up, and
+ * (so it stays a rotation) -right to right. Then it translates centre to centre. Any pair of
+ * orientations works: wall to wall, wall to floor, floor to ceiling.</p>
  */
-public record PortalGeometry(Vec3 sourceCenter, Vec3 sourceNormal, Vec3 destCenter, Vec3 destNormal, int quarterTurns, AABB sourceBox,
-		BlockPos sourceMin, Direction.Axis sourceAxis, int sourceWidth, int sourceHeight) {
+public record PortalGeometry(PortalEnd sourceEnd, PortalEnd destEnd, Vec3 sourceCenter, Vec3 sourceNormal, Vec3 destCenter, Vec3 destNormal,
+		Matrix3d rotation, AABB sourceBox) {
 
 	/** Height of the end portal surface within its block. */
 	public static final double END_PORTAL_SURFACE = 0.75;
 
 	public static PortalGeometry of(PortalLink link) {
-		Vec3 sourceCenter = center(link.min(), link.axis(), link.width(), link.height());
-		Vec3 destCenter = center(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight());
-		boolean bothVertical = link.axis() != Direction.Axis.Y && link.destAxis() != Direction.Axis.Y;
-		int turns = bothVertical && link.axis() != link.destAxis() ? 1 : 0;
-		return new PortalGeometry(sourceCenter, normal(link.axis()), destCenter, normal(link.destAxis()), turns,
-				box(link.min(), link.axis(), link.width(), link.height()), link.min(), link.axis(), link.width(), link.height());
+		PortalEnd source = link.source();
+		PortalEnd dest = link.dest();
+		// columns (right, up, facing) of each frame; M = destFrame · flip(right, facing) · sourceFrameᵀ
+		Matrix3d sourceFrame = frame(source);
+		Matrix3d destFrame = frame(dest);
+		Matrix3d flip = new Matrix3d().scaling(-1.0, 1.0, -1.0);
+		Matrix3d rotation = new Matrix3d(destFrame).mul(flip).mul(new Matrix3d(sourceFrame).transpose());
+		return new PortalGeometry(source, dest, center(source), unit(source.facing()), center(dest), unit(dest.facing()), rotation, box(source));
 	}
 
-	/** The plane centre of a portal rectangle (see the class comment for the two kinds). */
-	public static Vec3 center(BlockPos min, Direction.Axis axis, int width, int height) {
-		double halfW = width / 2.0;
-		return switch (axis) {
-			case X -> new Vec3(min.getX() + halfW, min.getY() + height / 2.0, min.getZ() + 0.5);
-			case Z -> new Vec3(min.getX() + 0.5, min.getY() + height / 2.0, min.getZ() + halfW);
-			case Y -> new Vec3(min.getX() + halfW, min.getY() + END_PORTAL_SURFACE, min.getZ() + height / 2.0);
-		};
+	private static Matrix3d frame(PortalEnd end) {
+		Vec3 r = unit(end.right());
+		Vec3 u = unit(end.up());
+		Vec3 n = unit(end.facing());
+		return new Matrix3d(r.x, r.y, r.z, u.x, u.y, u.z, n.x, n.y, n.z);
 	}
 
-	/** The portal blocks' bounding box. */
-	public static AABB box(BlockPos min, Direction.Axis axis, int width, int height) {
-		Vec3 start = Vec3.atLowerCornerOf(min);
-		return switch (axis) {
-			case X -> new AABB(start, start.add(width, height, 1));
-			case Z -> new AABB(start, start.add(1, height, width));
-			case Y -> new AABB(start, start.add(width, 1, height));
-		};
+	private static Vec3 unit(Direction direction) {
+		return Vec3.atLowerCornerOf(direction.getUnitVec3i());
 	}
 
-	/** Every block position of a portal rectangle. */
-	public static Iterable<BlockPos> blocks(BlockPos min, Direction.Axis axis, int width, int height) {
-		BlockPos max = switch (axis) {
-			case X -> min.offset(width - 1, height - 1, 0);
-			case Z -> min.offset(0, height - 1, width - 1);
-			case Y -> min.offset(width - 1, 0, height - 1);
-		};
-		return BlockPos.betweenClosed(min, max);
+	private static Vec3 absolute(Direction direction) {
+		Vec3i v = direction.getUnitVec3i();
+		return new Vec3(Math.abs(v.getX()), Math.abs(v.getY()), Math.abs(v.getZ()));
 	}
 
-	/** A portal on axis X spans X and Y, so it faces along Z (and vice versa); an end portal faces up. */
-	private static Vec3 normal(Direction.Axis axis) {
-		return switch (axis) {
-			case X -> new Vec3(0, 0, 1);
-			case Z -> new Vec3(1, 0, 0);
-			case Y -> new Vec3(0, 1, 0);
-		};
+	/** The centre of an end's opening, on its plane. */
+	public static Vec3 center(PortalEnd end) {
+		Vec3 extent = absolute(end.right()).scale(end.width()).add(absolute(end.up()).scale(end.height()));
+		Vec3 inPlane = Vec3.atLowerCornerOf(end.min()).add(extent.scale(0.5));
+		// the plane's coordinate along the normal axis: block start + surface sixteenths
+		Vec3 normalAxis = absolute(end.facing());
+		double planeCoordinate = normalAxis.dot(Vec3.atLowerCornerOf(end.min())) + end.surface() / 16.0;
+		return inPlane.subtract(normalAxis.scale(normalAxis.dot(inPlane))).add(normalAxis.scale(planeCoordinate));
+	}
+
+	/** The end's blocks' bounding box. */
+	public static AABB box(PortalEnd end) {
+		Vec3 start = Vec3.atLowerCornerOf(end.min());
+		Vec3 extent = absolute(end.right()).scale(end.width()).add(absolute(end.up()).scale(end.height())).add(absolute(end.facing()));
+		return new AABB(start, start.add(extent));
 	}
 
 	public boolean horizontal() {
-		return this.sourceAxis == Direction.Axis.Y;
+		return this.sourceEnd.facing().getAxis() == Direction.Axis.Y;
 	}
 
-	/** Rotates a horizontal direction by the portal pair's yaw turn: +90° yaw maps (x, z) to (-z, x). */
+	/** Rotates a direction (a velocity, a look vector) from the source side to the destination side. */
 	public Vec3 rotate(Vec3 v) {
-		Vec3 out = v;
-		for (int i = 0; i < this.quarterTurns; i++) {
-			out = new Vec3(-out.z, out.y, out.x);
-		}
-		return out;
+		Vector3d out = this.rotation.transform(new Vector3d(v.x, v.y, v.z));
+		return new Vec3(out.x, out.y, out.z);
 	}
 
 	public Vec3 toDest(Vec3 sourcePoint) {
 		return this.destCenter.add(this.rotate(sourcePoint.subtract(this.sourceCenter)));
 	}
 
-	public float toDestYaw(float yRot) {
-		return yRot + 90.0F * this.quarterTurns;
+	/** A camera's orientation (view to world) carried through: roll included, so the view lines up exactly. */
+	public Quaternionf toDest(Quaternionf orientation) {
+		Quaterniond turn = new Quaterniond().setFromNormalized(this.rotation);
+		Quaterniond carried = turn.mul(new Quaterniond(orientation.x, orientation.y, orientation.z, orientation.w));
+		return new Quaternionf((float) carried.x, (float) carried.y, (float) carried.z, (float) carried.w);
+	}
+
+	/**
+	 * A player's look direction carried through, as {yaw, pitch}. Players can't roll, so a
+	 * portal pair that would roll the view (e.g. wall to ceiling) keeps the look direction and
+	 * levels the horizon.
+	 */
+	public float[] toDestRotation(float yRot, float xRot) {
+		Vec3 look = Vec3.directionFromRotation(xRot, yRot);
+		Vec3 carried = this.rotate(look);
+		float yaw = (float) Math.toDegrees(Math.atan2(-carried.x, carried.z));
+		float pitch = (float) Math.toDegrees(Math.asin(Math.clamp(-carried.y, -1.0, 1.0)));
+		return new float[] {yaw, pitch};
 	}
 
 	/**
@@ -106,9 +117,8 @@ public record PortalGeometry(Vec3 sourceCenter, Vec3 sourceNormal, Vec3 destCent
 		}
 		Vec3 hit = from.add(to.subtract(from).scale(before / (before - after)));
 		Vec3 local = hit.subtract(this.sourceCenter);
-		double along = this.sourceAxis == Direction.Axis.Z ? local.z : local.x;
-		double across = this.sourceAxis == Direction.Axis.Y ? local.z : local.y;
-		return Math.abs(along) <= this.sourceWidth / 2.0 && Math.abs(across) <= this.sourceHeight / 2.0;
+		return Math.abs(local.dot(unit(this.sourceEnd.right()))) <= this.sourceEnd.width() / 2.0
+				&& Math.abs(local.dot(unit(this.sourceEnd.up()))) <= this.sourceEnd.height() / 2.0;
 	}
 
 	/** Corners of the source portal opening, pushed {@code offset} blocks toward {@code eye} along the normal. */
@@ -123,10 +133,8 @@ public record PortalGeometry(Vec3 sourceCenter, Vec3 sourceNormal, Vec3 destCent
 			side = 1;
 		}
 		Vec3 shift = this.sourceNormal.scale(side * offset);
-		double halfW = this.sourceWidth / 2.0 + margin;
-		double halfH = this.sourceHeight / 2.0 + margin;
-		Vec3 along = this.sourceAxis == Direction.Axis.Z ? new Vec3(0, 0, halfW) : new Vec3(halfW, 0, 0);
-		Vec3 across = this.sourceAxis == Direction.Axis.Y ? new Vec3(0, 0, halfH) : new Vec3(0, halfH, 0);
+		Vec3 along = unit(this.sourceEnd.right()).scale(this.sourceEnd.width() / 2.0 + margin);
+		Vec3 across = unit(this.sourceEnd.up()).scale(this.sourceEnd.height() / 2.0 + margin);
 		Vec3 c = this.sourceCenter.add(shift);
 		return new Vec3[] {
 				c.subtract(along).subtract(across),
@@ -134,5 +142,10 @@ public record PortalGeometry(Vec3 sourceCenter, Vec3 sourceNormal, Vec3 destCent
 				c.add(along).add(across),
 				c.subtract(along).add(across)
 		};
+	}
+
+	/** The source's block positions (for hiding its fill). */
+	public Iterable<BlockPos> sourceBlocks() {
+		return this.sourceEnd.blocks();
 	}
 }

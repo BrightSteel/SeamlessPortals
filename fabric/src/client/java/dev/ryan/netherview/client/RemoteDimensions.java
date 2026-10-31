@@ -49,6 +49,8 @@ public final class RemoteDimensions {
 	private static final Logger LOGGER = LoggerFactory.getLogger("netherview");
 
 	private static final Map<ResourceKey<Level>, List<RemoteDimension>> VIEWS = new HashMap<>();
+	/** Each destination world's dimension type, as the server named it in links. */
+	private static final Map<ResourceKey<Level>, String> TYPES = new HashMap<>();
 	private static List<Link> links = List.of();
 	private static ClientLevel trackedLevel;
 	/** The remote that showed the dimension the player just walked into; see {@link PortalViewRenderer}. */
@@ -88,7 +90,7 @@ public final class RemoteDimensions {
 		Minecraft minecraft = Minecraft.getInstance();
 		List<RemoteDimension> views = VIEWS.computeIfAbsent(key, k -> new ArrayList<>());
 		while (views.size() <= index) {
-			views.add(new RemoteDimension(minecraft, key));
+			views.add(new RemoteDimension(minecraft, key, TYPES.get(key)));
 			publishRemoteLevels();
 		}
 		return views.get(index);
@@ -155,6 +157,7 @@ public final class RemoteDimensions {
 		Minecraft minecraft = Minecraft.getInstance();
 		syncLevel(minecraft);
 		Link link = new Link(back, PortalGeometry.of(back), backDimension);
+		TYPES.put(backDimension, back.destDimensionType());
 		RemoteDimension remote = view(backDimension, 0);
 		remote.centerOn(ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
 		for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
@@ -197,9 +200,10 @@ public final class RemoteDimensions {
 		for (PortalLink link : payload.links()) {
 			ResourceKey<Level> dest = ResourceKey.create(Registries.DIMENSION, Identifier.parse(link.destDimension()));
 			int maxSize = ClientConfig.get().maxPortalSize;
-			if (dest == minecraft.level.dimension() || link.width() > maxSize || link.height() > maxSize) {
+			if (link.width() > maxSize || link.height() > maxSize) {
 				continue; // too big for this client: left as a vanilla portal
 			}
+			TYPES.put(dest, link.destDimensionType());
 			resolved.add(new Link(link, PortalGeometry.of(link), dest));
 		}
 		links = List.copyOf(resolved);
@@ -221,9 +225,6 @@ public final class RemoteDimensions {
 		}
 		syncLevel(minecraft);
 		ResourceKey<Level> dest = ResourceKey.create(Registries.DIMENSION, Identifier.parse(payload.dimension()));
-		if (dest == minecraft.level.dimension()) {
-			return;
-		}
 		RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.wrappedBuffer(payload.chunkPacket()), minecraft.getConnection().registryAccess());
 		try {
 			ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC.decode(buf);
@@ -246,9 +247,6 @@ public final class RemoteDimensions {
 		}
 		syncLevel(minecraft);
 		ResourceKey<Level> dest = ResourceKey.create(Registries.DIMENSION, Identifier.parse(payload.dimension()));
-		if (dest == minecraft.level.dimension()) {
-			return;
-		}
 		view(dest, 0);
 		if (entityCodecRegistries != connection.registryAccess()) {
 			entityCodec = GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(connection.registryAccess())).codec();
@@ -319,6 +317,7 @@ public final class RemoteDimensions {
 		PortalViewRenderer.forgetRemotes();
 		VIEWS.values().forEach(views -> views.forEach(RemoteDimension::close));
 		VIEWS.clear();
+		TYPES.clear();
 		publishRemoteLevels();
 		links = List.of();
 		PortalHiding.setLinks(links);

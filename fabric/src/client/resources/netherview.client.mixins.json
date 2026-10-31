@@ -18,7 +18,8 @@
 		"LocalPlayerMixin",
 		"RenderSectionRegionAccessor",
 		"SectionCompilerMixin",
-		"SectionOcclusionGraphMixin"
+		"SectionOcclusionGraphMixin",
+		"TheEndGatewayRendererMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

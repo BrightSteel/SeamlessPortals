@@ -12,6 +12,12 @@ import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import dev.ryan.netherview.net.PortalEnd;
+import dev.ryan.netherview.net.PortalFill;
+import net.minecraft.client.renderer.BiomeColors;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import com.mojang.renderpearl.api.pipeline.CompareOp;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
@@ -45,6 +51,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+import org.joml.Quaternionf;
 import org.joml.Vector3fc;
 import org.joml.Vector4f;
 import org.slf4j.Logger;
@@ -126,6 +133,20 @@ public final class PortalViewRenderer {
 			.build();
 	/** How long the camera may stay "through" a portal waiting for the server to move the player. */
 	private static final long CROSSED_TIMEOUT_MS = 2000L;
+
+	private static final RenderPipeline TEXTURED_CARD_PIPELINE = RenderPipeline.builder(RenderPipelines.GLOBALS_SNIPPET)
+			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/portal_card_tex"))
+			.withBindGroupLayout(BindGroupLayouts.PROJECTION)
+			.withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
+			.withBindGroupLayout(BindGroupLayouts.SAMPLER0)
+			.withVertexShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_card_tex"))
+			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_card_tex"))
+			.withVertexBinding(0, DefaultVertexFormat.POSITION_TEX)
+			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+			.withCull(false)
+			.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
+			.withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
+			.build();
 
 	private static final RenderPipeline CARD_PIPELINE = RenderPipeline.builder(RenderPipelines.GLOBALS_SNIPPET)
 			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/portal_card"))
@@ -210,7 +231,7 @@ public final class PortalViewRenderer {
 			return;
 		}
 		try {
-			bridge.camera.place(main, bridge.level, main.position(), main.yRot(), main.xRot());
+			bridge.camera.place(main, bridge.level, main.position(), main.rotation());
 			renderLevelInto(minecraft, main, bridge, main.position(), new Matrix4f(levelProjection));
 			bridgeRendered = bridge;
 		} catch (RuntimeException e) {
@@ -262,7 +283,7 @@ public final class PortalViewRenderer {
 		try {
 			PortalGeometry geometry = link.geometry();
 			Vec3 remoteEye = geometry.toDest(main.position());
-			remote.camera.place(main, remote.level, remoteEye, geometry.toDestYaw(main.yRot()), main.xRot());
+			remote.camera.place(main, remote.level, remoteEye, geometry.toDest(main.rotation()));
 			renderLevelInto(minecraft, main, remote, remoteEye, new Matrix4f(levelProjection));
 			activeLink = link;
 			activeRemote = remote;
@@ -292,7 +313,7 @@ public final class PortalViewRenderer {
 		List<Link> visible = new ArrayList<>();
 		for (Link link : RemoteDimensions.links()) {
 			if (frustum.isVisible(link.geometry().sourceBox().inflate(0.25))
-					&& isPortal(minecraft.level.getBlockState(link.link().min()))) {
+					&& isFill(minecraft.level.getBlockState(link.link().min()), link.link().source().fill())) {
 				visible.add(link);
 			}
 		}
@@ -342,8 +363,16 @@ public final class PortalViewRenderer {
 		assignments = assigned;
 	}
 
-	private static boolean isPortal(BlockState state) {
-		return state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL);
+	/** Whether the opening still holds its fill (a broken portal stops being a window). */
+	private static boolean isFill(BlockState state, PortalFill fill) {
+		return switch (fill) {
+			case NETHER_PORTAL -> state.is(Blocks.NETHER_PORTAL);
+			case END_PORTAL -> state.is(Blocks.END_PORTAL);
+			case END_GATEWAY -> state.is(Blocks.END_GATEWAY);
+			case WATER -> state.is(Blocks.WATER);
+			case LAVA -> state.is(Blocks.LAVA);
+			case NONE -> state.isAir();
+		};
 	}
 
 	/**
@@ -484,12 +513,12 @@ public final class PortalViewRenderer {
 	private static void renderRemote(Minecraft minecraft, Camera main, Link link, RemoteDimension remote, Matrix4f levelProjection, Vector4f rect) {
 		PortalGeometry geometry = link.geometry();
 		Vec3 remoteEye = geometry.toDest(main.position());
-		float yRot = geometry.toDestYaw(main.yRot());
+		Quaternionf orientation = geometry.toDest(main.rotation());
 		// Place once to get the view rotation for the clip plane, then again with the culling
 		// frustum narrowed to the portal (the rotation is unchanged, so the plane still holds).
-		remote.camera.place(main, remote.level, remoteEye, yRot, main.xRot());
+		remote.camera.place(main, remote.level, remoteEye, orientation);
 		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye));
-		remote.camera.place(main, remote.level, remoteEye, yRot, main.xRot(), narrowedToRect(levelProjection, rect));
+		remote.camera.place(main, remote.level, remoteEye, orientation, narrowedToRect(levelProjection, rect));
 		((LevelExtractorAccessor) remote.extractor).netherview$setPrevCamRotX(Double.NaN);
 		renderLevelInto(minecraft, main, remote, remoteEye, projection);
 	}
@@ -714,9 +743,17 @@ public final class PortalViewRenderer {
 		for (Pass pass : passes) {
 			drawWindow(pass.link(), pass.view(), null);
 		}
+		// Over-budget portals look like their fill: the swirl, water or lava from the block atlas,
+		// or for end portal and gateway fills the vanilla starfield, simply left unhidden.
+		Set<BlockPos> unhiddenEnds = new HashSet<>();
 		for (Link card : cards) {
-			drawWindow(card, null, cardColor(card));
+			switch (card.link().source().fill()) {
+				case NETHER_PORTAL, WATER, LAVA -> drawTexturedCard(card);
+				case END_PORTAL, END_GATEWAY -> card.geometry().sourceBlocks().forEach(pos -> unhiddenEnds.add(pos.immutable()));
+				case NONE -> drawWindow(card, null, cardColor(card));
+			}
 		}
+		PortalHiding.setUnhiddenEndPortals(unhiddenEnds);
 		passes.clear();
 		cards.clear();
 	}
@@ -795,5 +832,78 @@ public final class PortalViewRenderer {
 				LOGGER.error("Portal composite failed", e);
 			}
 		}
+	}
+
+	/** A culled portal drawn as its fill: one quad per block on the portal plane, with the fill's (animated) sprite. */
+	private static void drawTexturedCard(Link link) {
+		Minecraft minecraft = Minecraft.getInstance();
+		PortalFill fill = link.link().source().fill();
+		TextureAtlas atlas = (TextureAtlas) minecraft.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+		TextureAtlasSprite sprite = atlas.getSprite(Identifier.withDefaultNamespace(switch (fill) {
+			case WATER -> "block/water_still";
+			case LAVA -> "block/lava_still";
+			default -> "block/nether_portal";
+		}));
+		Vector4f tint = new Vector4f(1.0F, 1.0F, 1.0F, 1.0F);
+		if (fill == PortalFill.WATER && minecraft.level != null) {
+			int rgb = BiomeColors.getAverageWaterColor(minecraft.level, BlockPos.containing(link.geometry().sourceCenter()));
+			tint.set((rgb >> 16 & 0xFF) / 255.0F, (rgb >> 8 & 0xFF) / 255.0F, (rgb & 0xFF) / 255.0F, 1.0F);
+		}
+
+		GameRenderer gameRenderer = minecraft.gameRenderer;
+		RenderTarget mainTarget = gameRenderer.mainRenderTarget();
+		CameraRenderState mainCamera = gameRenderer.gameRenderState().levelRenderState.cameraRenderState;
+		Vec3 eye = mainCamera.pos;
+		PortalEnd end = link.link().source();
+		Vec3[] corners = link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET);
+		Vec3 origin = corners[0].subtract(eye);
+		Vec3 right = corners[1].subtract(corners[0]).scale(1.0 / end.width());
+		Vec3 up = corners[3].subtract(corners[0]).scale(1.0 / end.height());
+		int vertexCount = end.width() * end.height() * 6;
+		try (ByteBufferBuilder bytes = ByteBufferBuilder.exactlySized(DefaultVertexFormat.POSITION_TEX.getVertexSize() * vertexCount)) {
+			BufferBuilder builder = new BufferBuilder(bytes, PrimitiveTopology.TRIANGLES, DefaultVertexFormat.POSITION_TEX);
+			for (int i = 0; i < end.width(); i++) {
+				for (int j = 0; j < end.height(); j++) {
+					Vec3 p00 = origin.add(right.scale(i)).add(up.scale(j));
+					Vec3 p10 = p00.add(right);
+					Vec3 p11 = p10.add(up);
+					Vec3 p01 = p00.add(up);
+					cardVertex(builder, p00, sprite.getU0(), sprite.getV1());
+					cardVertex(builder, p10, sprite.getU1(), sprite.getV1());
+					cardVertex(builder, p11, sprite.getU1(), sprite.getV0());
+					cardVertex(builder, p00, sprite.getU0(), sprite.getV1());
+					cardVertex(builder, p11, sprite.getU1(), sprite.getV0());
+					cardVertex(builder, p01, sprite.getU0(), sprite.getV0());
+				}
+			}
+			try (MeshData mesh = builder.buildOrThrow()) {
+				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> "netherview portal card", GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
+				try {
+					GpuBufferSlice transforms = RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix), tint);
+					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
+					try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
+							() -> "netherview portal card", mainTarget.getColorTextureView(), Optional.empty(),
+							mainTarget.getDepthTextureView(), OptionalDouble.empty())) {
+						pass.setPipeline(RenderSystem.getCompiledPipeline(TEXTURED_CARD_PIPELINE));
+						RenderSystem.bindDefaultUniforms(pass);
+						pass.setUniform("DynamicTransforms", transforms);
+						pass.setUniform("Sampler0", atlas.getTextureView(), atlas.getSampler());
+						pass.setVertexBuffer(0, vertices.slice());
+						pass.draw(vertexCount, 1, 0, 0);
+					}
+				} finally {
+					vertices.close();
+				}
+			}
+		} catch (RuntimeException e) {
+			if (!loggedFailure) {
+				loggedFailure = true;
+				LOGGER.error("Portal card failed", e);
+			}
+		}
+	}
+
+	private static void cardVertex(BufferBuilder builder, Vec3 pos, float u, float v) {
+		builder.addVertex((float) pos.x, (float) pos.y, (float) pos.z).setUv(u, v);
 	}
 }

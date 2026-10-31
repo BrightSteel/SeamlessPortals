@@ -32,7 +32,7 @@ public abstract class ClientPacketListenerMixin {
 			method = "handleMovePlayer",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V", shift = At.Shift.AFTER))
 	private void netherview$rememberClientPosition(ClientboundPlayerPositionPacket packet, CallbackInfo ci) {
-		DimensionHandoff.beforeServerPlacement();
+		DimensionHandoff.beforeServerPlacement((ClientPacketListener) (Object) this);
 	}
 
 	@Inject(method = "handleMovePlayer", at = @At("TAIL"))

@@ -2,6 +2,7 @@ package dev.ryan.netherview.client;
 
 import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
+import dev.ryan.netherview.net.PortalFill;
 import dev.ryan.netherview.net.PortalLink;
 import dev.ryan.netherview.net.PortalTravelPayload;
 import net.minecraft.client.Minecraft;
@@ -100,15 +101,16 @@ public final class DimensionHandoff {
 		PortalGeometry geometry = used.geometry();
 		arrivalPosition = geometry.toDest(minecraft.player.position());
 		arrivalVelocity = geometry.rotate(minecraft.player.getDeltaMovement());
-		arrivalYRot = geometry.toDestYaw(minecraft.player.getYRot());
-		arrivalXRot = minecraft.player.getXRot();
+		float[] rotation = geometry.toDestRotation(minecraft.player.getYRot(), minecraft.player.getXRot());
+		arrivalYRot = rotation[0];
+		arrivalXRot = rotation[1];
 
 		PortalLink link = used.link();
-		if (geometry.horizontal()) {
-			return; // no portal where you land in the End (or at your spawn), so no way back to show
+		if (link.dest().fill() == PortalFill.NONE) {
+			return; // nothing where you land (the End platform, your spawn, a target): no way back to show
 		}
-		wayBack = new PortalLink(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight(),
-				minecraft.level.dimension().identifier().toString(), link.min(), link.axis(), link.width(), link.height());
+		wayBack = link.reversed(minecraft.level.dimension().identifier().toString(),
+				minecraft.level.dimensionTypeRegistration().unwrapKey().map(key -> key.identifier().toString()).orElse("minecraft:overworld"));
 		wayBackDimension = minecraft.level.dimension();
 		wayBackChunks = RemoteDimension.snapshotChunks(minecraft.level,
 				ChunkPos.containing(BlockPos.containing(geometry.sourceCenter())), RemoteDimension.chunkRadius());
@@ -165,7 +167,10 @@ public final class DimensionHandoff {
 	 * Just before vanilla applies the server's placement after a hand-off: remember where the
 	 * player has actually got to, so {@link #afterServerPlacement} can put them back there.
 	 */
-	public static void beforeServerPlacement() {
+	public static void beforeServerPlacement(ClientPacketListener listener) {
+		if (sameWorldArrival(listener)) {
+			return;
+		}
 		LocalPlayer player = Minecraft.getInstance().player;
 		if (holdThroughPlacement && player != null) {
 			heldPosition = player.position();
@@ -188,6 +193,44 @@ public final class DimensionHandoff {
 		}
 		holdThroughPlacement = false;
 		heldPosition = null;
+	}
+
+	/**
+	 * A portal within the same world: no respawn, just this position packet. The view of the
+	 * destination is a separate copy of this world; its chunks fill whatever the player's level
+	 * lacks there, it bridges while those are meshed, and the player keeps their own position
+	 * carried through the portal.
+	 */
+	private static boolean sameWorldArrival(ClientPacketListener listener) {
+		PortalLink announced = travel;
+		Minecraft minecraft = Minecraft.getInstance();
+		ClientLevel level = minecraft.level;
+		if (announced == null || level == null || minecraft.player == null
+				|| !announced.destDimension().equals(level.dimension().identifier().toString())) {
+			return false;
+		}
+		travel = null;
+		PortalGeometry geometry = PortalGeometry.of(announced);
+		LocalPlayer player = minecraft.player;
+		float[] rotation = geometry.toDestRotation(player.getYRot(), player.getXRot());
+		heldPosition = geometry.toDest(player.position());
+		heldVelocity = geometry.rotate(player.getDeltaMovement());
+		heldYRot = rotation[0];
+		heldXRot = rotation[1];
+		holdThroughPlacement = true;
+
+		RemoteDimension remote = RemoteDimensions.get(level.dimension());
+		if (remote != null && remote.center() != null) {
+			level.getChunkSource().updateViewCenter(remote.center().x(), remote.center().z());
+			for (ClientboundLevelChunkWithLightPacket chunk : remote.snapshotChunks()) {
+				if (level.getChunkSource().getChunk(chunk.x(), chunk.z(), false) == null) {
+					listener.handleLevelChunkWithLight(chunk);
+				}
+			}
+			RemoteDimensions.adoptAsBridge(level.dimension());
+			fadeSuppressedUntil = Util.getMillis() + FADE_SUPPRESS_MS;
+		}
+		return true;
 	}
 
 	/** For a moment after arriving, new chunk sections appear at once instead of fading in. */

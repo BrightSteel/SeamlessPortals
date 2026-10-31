@@ -3,6 +3,7 @@
 	"package": "dev.ryan.netherview.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
+		"EndGatewayBlockMixin",
 		"EndPortalBlockMixin",
 		"NetherPortalBlockMixin"
 	],
