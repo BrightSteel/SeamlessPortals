@@ -15,6 +15,15 @@ import org.joml.Matrix4f;
 public final class PortalCamera extends Camera {
 
 	public void place(Camera main, ClientLevel level, Vec3 position, float yRot, float xRot) {
+		this.place(main, level, position, yRot, xRot, null);
+	}
+
+	/**
+	 * @param cullProjection if given, the projection whose frustum culls sections and entities
+	 *                       (e.g. narrowed to a portal's part of the screen); otherwise the
+	 *                       camera's usual one
+	 */
+	public void place(Camera main, ClientLevel level, Vec3 position, float yRot, float xRot, Matrix4f cullProjection) {
 		Minecraft minecraft = Minecraft.getInstance();
 		CameraAccessor self = (CameraAccessor) (Object) this;
 		CameraAccessor mainLens = (CameraAccessor) main;
@@ -31,8 +40,8 @@ public final class PortalCamera extends Camera {
 		this.setRotation(yRot, xRot);
 		this.setPosition(position);
 
-		self.netherview$prepareCullFrustum(
-				this.getViewRotationMatrix(new Matrix4f()), self.netherview$createProjectionMatrixForCulling(), position);
+		self.netherview$prepareCullFrustum(this.getViewRotationMatrix(new Matrix4f()),
+				cullProjection != null ? cullProjection : self.netherview$createProjectionMatrixForCulling(), position);
 		self.netherview$setupPerspective(
 				Camera.PROJECTION_Z_NEAR, mainLens.netherview$getDepthFar(), main.getFov(),
 				minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight());

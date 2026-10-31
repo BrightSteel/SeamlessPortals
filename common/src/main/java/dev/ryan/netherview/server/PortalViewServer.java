@@ -3,6 +3,7 @@ package dev.ryan.netherview.server;
 import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.net.PortalLink;
 import dev.ryan.netherview.net.PortalLinksPayload;
+import dev.ryan.netherview.net.PortalTravelPayload;
 import dev.ryan.netherview.net.RemoteChunkPayload;
 import dev.ryan.netherview.net.RemoteEntitiesPayload;
 import io.netty.buffer.Unpooled;
@@ -50,13 +51,12 @@ import java.util.UUID;
  */
 public final class PortalViewServer {
 	private static final int SCAN_INTERVAL_TICKS = 10;
-	private static final int PORTAL_SCAN_RADIUS = 24;
 	/** Chunks around the destination portal that are sent, as a radius. */
-	private static final int VIEW_RADIUS_CHUNKS = 4;
-	private static final int CHUNKS_PER_SCAN = 8;
 	/** How often already-sent chunks are re-encoded and re-sent if they changed. */
 	private static final int RESEND_CHECK_TICKS = 100;
 	private static final int FOUND_DEST_CACHE_TICKS = 1200;
+	/** Largest eye movement in one tick still treated as walking (or flying) rather than a teleport. */
+	private static final double MAX_STEP = 4.0;
 	private static final int VIRTUAL_DEST_CACHE_TICKS = 200;
 
 	private static final Map<UUID, PlayerState> PLAYERS = new HashMap<>();
@@ -68,11 +68,38 @@ public final class PortalViewServer {
 	private static PayloadSender sender;
 
 	/** Called once by the platform (Fabric mod or Paper plugin) before the first tick. */
-	public static void init(PayloadSender payloadSender) {
+	private static ServerConfig config = ServerConfig.DEFAULTS;
+
+	public static void init(PayloadSender payloadSender, ServerConfig serverConfig) {
 		sender = payloadSender;
+		config = serverConfig;
 	}
 
+	private static final boolean PERF = Boolean.getBoolean("netherview.perf");
+	private static long perfNanos;
+	private static long perfMaxNanos;
+	private static int perfTicks;
+
 	public static void tick(MinecraftServer server) {
+		if (!PERF) {
+			tickPlayers(server);
+			return;
+		}
+		long start = System.nanoTime();
+		tickPlayers(server);
+		long took = System.nanoTime() - start;
+		perfNanos += took;
+		perfMaxNanos = Math.max(perfMaxNanos, took);
+		if (++perfTicks == 100) {
+			org.slf4j.LoggerFactory.getLogger("netherview").info("[perf] server: {} us/tick avg, {} us max, {} players tracked",
+					perfNanos / perfTicks / 1000, perfMaxNanos / 1000, PLAYERS.size());
+			perfNanos = 0;
+			perfMaxNanos = 0;
+			perfTicks = 0;
+		}
+	}
+
+	private static void tickPlayers(MinecraftServer server) {
 		int now = server.getTickCount();
 		boolean scan = now % SCAN_INTERVAL_TICKS == 0;
 		if (scan) {
@@ -97,7 +124,7 @@ public final class PortalViewServer {
 	/** Whether this player's travel through the portal at {@code pos} is handled here instead of by vanilla. */
 	public static boolean handlesTravel(ServerPlayer player, BlockPos pos) {
 		PlayerState state = PLAYERS.get(player.getUUID());
-		if (state == null) {
+		if (state == null || !config.seamlessTravel()) {
 			return false;
 		}
 		for (PortalLink link : state.links) {
@@ -134,7 +161,7 @@ public final class PortalViewServer {
 	 */
 	private static boolean travelThroughPortal(MinecraftServer server, ServerPlayer player) {
 		PlayerState state = PLAYERS.get(player.getUUID());
-		if (state == null) {
+		if (state == null || !config.seamlessTravel()) {
 			return false;
 		}
 		ServerLevel level = player.level();
@@ -143,7 +170,10 @@ public final class PortalViewServer {
 		boolean sameLevel = state.lastEyeDimension == level.dimension();
 		state.lastEye = eye;
 		state.lastEyeDimension = level.dimension();
-		if (lastEye == null || !sameLevel || state.links.isEmpty() || player.isPassenger() || player.isSleeping()) {
+		// A jump of more than a few blocks in one tick is a teleport or respawn, not a step
+		// through a portal (the straight line between the two spots could cross one).
+		if (lastEye == null || !sameLevel || state.links.isEmpty() || player.isPassenger() || player.isSleeping()
+				|| lastEye.distanceToSqr(eye) > MAX_STEP * MAX_STEP) {
 			return false;
 		}
 		for (PortalLink link : state.links) {
@@ -156,7 +186,7 @@ public final class PortalViewServer {
 			if (dest == null) {
 				return false;
 			}
-			PortalLink target = ensureDestinationPortal(level, dest, link);
+			PortalLink target = vanillaDestination(level, dest, link, player);
 			if (target == null) {
 				return false;
 			}
@@ -167,6 +197,7 @@ public final class PortalViewServer {
 			state.lastEye = null;
 			// These links belong to the dimension being left; the next scan sends the new ones.
 			state.links = List.of();
+			sender.send(player, new PortalTravelPayload(target), PortalTravelPayload.STREAM_CODEC);
 			player.teleport(new TeleportTransition(dest, destFeet, velocity, yRot, player.getXRot(),
 					TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET)));
 			// Arriving just past the destination plane still overlaps its portal blocks; the
@@ -177,24 +208,37 @@ public final class PortalViewServer {
 		return false;
 	}
 
-	/** A link may point at where a portal would be built; build it now, as vanilla would on arrival. */
-	private static PortalLink ensureDestinationPortal(ServerLevel level, ServerLevel dest, PortalLink link) {
-		if (dest.getBlockState(link.destMin()).is(Blocks.NETHER_PORTAL)) {
-			return link;
+	/**
+	 * The portal vanilla would send this player to, found the way vanilla does it: from the
+	 * player's exact position (not the portal's centre, which is all the view uses), so portal
+	 * hubs and linking tricks behave exactly as without the mod. Builds a portal if vanilla
+	 * would. The player is then placed relative to that portal with the view's transform.
+	 */
+	private static PortalLink vanillaDestination(ServerLevel level, ServerLevel dest, PortalLink link, ServerPlayer player) {
+		double scale = DimensionType.getTeleportationScale(level.dimensionType(), dest.dimensionType());
+		WorldBorder border = dest.getWorldBorder();
+		BlockPos approx = border.clampToBounds(player.getX() * scale, player.getY(), player.getZ() * scale);
+		Optional<BlockPos> found = dest.getPortalForcer().findClosestPortalPosition(approx, dest.dimension() == Level.NETHER, border);
+		BlockUtil.FoundRectangle rect;
+		Direction.Axis destAxis;
+		if (found.isPresent() && dest.getBlockState(found.get()).is(Blocks.NETHER_PORTAL)) {
+			BlockState state = dest.getBlockState(found.get());
+			destAxis = state.getValue(NetherPortalBlock.AXIS);
+			rect = BlockUtil.getLargestRectangleAround(found.get(), destAxis, 21, Direction.Axis.Y, 21, p -> dest.getBlockState(p) == state);
+		} else {
+			Optional<BlockUtil.FoundRectangle> created = dest.getPortalForcer().createPortal(approx, link.axis());
+			if (created.isEmpty()) {
+				return null;
+			}
+			rect = created.get();
+			destAxis = dest.getBlockState(rect.minCorner).getValue(NetherPortalBlock.AXIS);
 		}
-		Optional<BlockUtil.FoundRectangle> created = dest.getPortalForcer().createPortal(
-				BlockPos.containing(rectCenter(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight())), link.axis());
-		if (created.isEmpty()) {
-			return null;
-		}
-		BlockUtil.FoundRectangle rect = created.get();
 		DESTINATIONS.remove(new DestKey(level.dimension(), link.min(), link.axis(), link.width(), link.height()));
-		Direction.Axis destAxis = dest.getBlockState(rect.minCorner).getValue(NetherPortalBlock.AXIS);
 		return new PortalLink(link.min(), link.axis(), link.width(), link.height(),
 				link.destDimension(), rect.minCorner, destAxis, rect.axis1Size, rect.axis2Size);
 	}
 
-	/** Every tick: mirror the entities around the nearest portal's destination. */
+	/** Every tick: mirror the entities around the streamed destinations. */
 	private static void syncEntities(MinecraftServer server, ServerPlayer player, int now) {
 		PlayerState state = PLAYERS.get(player.getUUID());
 		if (state == null) {
@@ -208,10 +252,8 @@ public final class PortalViewServer {
 			destId = state.entities.dimension();
 			packets = state.entities.reset(dest);
 		} else {
-			PortalLink nearest = state.links.getFirst();
 			destId = destKey.identifier().toString();
-			Vec3 center = rectCenter(nearest.destMin(), nearest.destAxis(), nearest.destWidth(), nearest.destHeight());
-			packets = state.entities.update(player, dest, destId, center, now);
+			packets = state.entities.update(player, dest, destId, streamedCenters(state.links), config.entityRadius(), now);
 		}
 		if (!packets.isEmpty() && destId != null) {
 			sender.send(player, new RemoteEntitiesPayload(destId, packets), RemoteEntitiesPayload.STREAM_CODEC);
@@ -237,16 +279,31 @@ public final class PortalViewServer {
 			return;
 		}
 
-		// Only the nearest portal's destination is streamed; the client keeps one remote
-		// chunk window per dimension.
-		PortalLink nearest = links.getFirst();
 		String destId = destKey.identifier().toString();
 		if (!destId.equals(state.sentDimension)) {
 			state.sentDimension = destId;
 			state.sentChunkHashes.clear();
 			state.lastFullCheck = now;
 		}
-		sendChunks(player, state, dest, destId, nearest, now);
+		sendChunks(player, state, dest, destId, streamedCenters(links), now);
+	}
+
+	/**
+	 * Destination centres that get chunks and entities, nearest portal first, de-duplicated
+	 * (many portals often lead to the same one), capped at {@link ServerConfig#streamedDestinations()}.
+	 */
+	private static List<Vec3> streamedCenters(List<PortalLink> links) {
+		List<Vec3> centers = new ArrayList<>();
+		for (PortalLink link : links) {
+			Vec3 center = rectCenter(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight());
+			if (centers.stream().noneMatch(c -> c.distanceToSqr(center) < 16 * 16)) {
+				centers.add(center);
+				if (centers.size() == config.streamedDestinations()) {
+					break;
+				}
+			}
+		}
+		return centers;
 	}
 
 	private static ResourceKey<Level> otherSide(ResourceKey<Level> dimension) {
@@ -263,7 +320,7 @@ public final class PortalViewServer {
 
 	private static List<PortalLink> findLinks(ServerLevel level, ServerLevel dest, BlockPos center, int now) {
 		List<BlockPos> portalBlocks = level.getPoiManager()
-				.getInSquare(type -> type.is(PoiTypes.NETHER_PORTAL), center, PORTAL_SCAN_RADIUS, PoiManager.Occupancy.ANY)
+				.getInSquare(type -> type.is(PoiTypes.NETHER_PORTAL), center, config.scanRadius(), PoiManager.Occupancy.ANY)
 				.map(PoiRecord::getPos)
 				.sorted(Comparator.comparingDouble(pos -> pos.distSqr(center)))
 				.toList();
@@ -285,6 +342,9 @@ public final class PortalViewServer {
 				for (int h = 0; h < rect.axis2Size; h++) {
 					covered.add(rect.minCorner.relative(axis, w).above(h));
 				}
+			}
+			if (rect.axis1Size > config.maxPortalSize() || rect.axis2Size > config.maxPortalSize()) {
+				continue; // too big to show through: stays a vanilla portal
 			}
 			PortalLink link = resolve(level, dest, rect, axis, now);
 			if (link != null) {
@@ -319,7 +379,7 @@ public final class PortalViewServer {
 			ChunkPos chunk = ChunkPos.containing(pos);
 			if (dest.getChunkSource().getChunkNow(chunk.x(), chunk.z()) == null) {
 				// Load it in the background and try again on a later scan.
-				dest.getChunkSource().addTicketWithRadius(TicketType.PORTAL, chunk, 1);
+				loadWithoutTicking(dest, chunk);
 				return null;
 			}
 			BlockState destState = dest.getBlockState(pos);
@@ -354,14 +414,27 @@ public final class PortalViewServer {
 
 	// ── chunk streaming ─────────────────────────────────────────────────────
 
-	private static void sendChunks(ServerPlayer player, PlayerState state, ServerLevel dest, String destId, PortalLink link, int now) {
-		Vec3 destCenter = rectCenter(link.destMin(), link.destAxis(), link.destWidth(), link.destHeight());
-		ChunkPos centerChunk = ChunkPos.containing(BlockPos.containing(destCenter));
-		dest.getChunkSource().addTicketWithRadius(TicketType.PORTAL, centerChunk, VIEW_RADIUS_CHUNKS);
+	private static void sendChunks(ServerPlayer player, PlayerState state, ServerLevel dest, String destId, List<Vec3> centers, int now) {
+		// Nearest destination first, so its view fills in before the others.
+		List<ChunkPos> wanted = new ArrayList<>();
+		for (Vec3 center : centers) {
+			ChunkPos centerChunk = ChunkPos.containing(BlockPos.containing(center));
+			if (config.tickDestination()) {
+				dest.getChunkSource().addTicketWithRadius(TicketType.PORTAL, centerChunk, config.viewRadiusChunks());
+			}
+			for (ChunkPos pos : chunksAround(centerChunk, config.viewRadiusChunks())) {
+				if (!wanted.contains(pos)) {
+					wanted.add(pos);
+					if (!config.tickDestination()) {
+						loadWithoutTicking(dest, pos);
+					}
+				}
+			}
+		}
 
 		boolean fullCheck = now - state.lastFullCheck >= RESEND_CHECK_TICKS;
-		int budget = CHUNKS_PER_SCAN;
-		for (ChunkPos pos : chunksAround(centerChunk, VIEW_RADIUS_CHUNKS)) {
+		int budget = config.chunksPerScan();
+		for (ChunkPos pos : wanted) {
 			long key = pos.pack();
 			if (!fullCheck && state.sentChunkHashes.containsKey(key)) {
 				continue;
@@ -385,6 +458,16 @@ public final class PortalViewServer {
 		if (fullCheck) {
 			state.lastFullCheck = now;
 		}
+	}
+
+	/**
+	 * A ticket at the "full chunk" level and no wider: the chunk is loaded and can be sent,
+	 * but nothing in it ticks (no random ticks, mob spawning or entity movement), exactly
+	 * like chunks at the edge of a player's view distance. A ticket's level is 33 minus its
+	 * radius; ticking starts at 32 (blocks) and 31 (entities).
+	 */
+	private static void loadWithoutTicking(ServerLevel level, ChunkPos pos) {
+		level.getChunkSource().addTicketWithRadius(TicketType.PORTAL, pos, 0);
 	}
 
 	private static List<ChunkPos> chunksAround(ChunkPos center, int radius) {

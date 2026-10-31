@@ -72,13 +72,18 @@ public record PortalGeometry(Vec3 sourceCenter, Vec3 sourceNormal, Vec3 destCent
 
 	/** Corners of the source portal opening, pushed {@code offset} blocks toward {@code eye} along the normal. */
 	public Vec3[] sourceCorners(Vec3 eye, double offset) {
+		return this.sourceCorners(eye, offset, 0.0);
+	}
+
+	/** As {@link #sourceCorners(Vec3, double)}, with the rectangle grown by {@code margin} blocks on every side. */
+	public Vec3[] sourceCorners(Vec3 eye, double offset, double margin) {
 		double side = Math.signum(eye.subtract(this.sourceCenter).dot(this.sourceNormal));
 		if (side == 0) {
 			side = 1;
 		}
 		Vec3 shift = this.sourceNormal.scale(side * offset);
-		double halfW = this.sourceWidth / 2.0;
-		double halfH = this.sourceHeight / 2.0;
+		double halfW = this.sourceWidth / 2.0 + margin;
+		double halfH = this.sourceHeight / 2.0 + margin;
 		Vec3 along = this.sourceAxis == Direction.Axis.X ? new Vec3(halfW, 0, 0) : new Vec3(0, 0, halfW);
 		Vec3 up = new Vec3(0, halfH, 0);
 		Vec3 c = this.sourceCenter.add(shift);

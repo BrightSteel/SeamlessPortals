@@ -22,7 +22,7 @@ loom {
 			client()
 			name = "Paper Test Client"
 			programArgs "--quickPlayMultiplayer", "localhost:25571"
-			vmArgs "-Dnetherview.devCapture=true"
+			vmArgs "-Dnetherview.perf=true", "-Dnetherview.devCapture=true"
 		}
 	}
 

@@ -7,13 +7,17 @@
 		"ClientPacketListenerAccessor",
 		"ClientPacketListenerMixin",
 		"CloudRendererInvoker",
+		"FramerateLimitTrackerMixin",
 		"GameRendererAccessor",
 		"GameRendererMixin",
+		"LevelExtractorAccessor",
 		"LevelExtractorMixin",
 		"LevelRendererAccessor",
+		"LevelRendererMixin",
 		"LocalPlayerMixin",
 		"RenderSectionRegionAccessor",
-		"SectionCompilerMixin"
+		"SectionCompilerMixin",
+		"SectionOcclusionGraphMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

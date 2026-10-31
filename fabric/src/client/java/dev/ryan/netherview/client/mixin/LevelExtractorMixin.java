@@ -1,7 +1,11 @@
 package dev.ryan.netherview.client.mixin;
 
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import dev.ryan.netherview.client.ClientConfig;
 import dev.ryan.netherview.client.RemoteDimensions;
+import net.minecraft.client.Options;
 import net.minecraft.client.Camera;
 import net.minecraft.client.particle.ParticleEngine;
 import net.minecraft.client.renderer.culling.Frustum;
@@ -18,5 +22,16 @@ public abstract class LevelExtractorMixin {
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleEngine;extract(Lnet/minecraft/client/renderer/state/level/ParticlesRenderState;Lnet/minecraft/client/renderer/culling/Frustum;Lnet/minecraft/client/Camera;F)V"))
 	private boolean netherview$skipParticlesForRemote(ParticleEngine engine, ParticlesRenderState state, Frustum frustum, Camera camera, float partialTicks) {
 		return !RemoteDimensions.isRemoteExtractor((LevelExtractor) (Object) this);
+	}
+
+	/** Remote views use their own (configurable, usually shorter) render distance. */
+	@WrapOperation(
+			method = {"extract", "allChanged"},
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Options;getEffectiveRenderDistance()I"))
+	private int netherview$remoteRenderDistance(Options options, Operation<Integer> original) {
+		int distance = original.call(options);
+		return RemoteDimensions.isRemoteExtractor((LevelExtractor) (Object) this)
+				? Math.min(distance, ClientConfig.get().effectiveRemoteRenderDistance())
+				: distance;
 	}
 }

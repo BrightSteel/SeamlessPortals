@@ -3,6 +3,7 @@ package dev.ryan.netherview.client;
 import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
 import dev.ryan.netherview.net.PortalLink;
+import dev.ryan.netherview.net.PortalTravelPayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
@@ -38,6 +39,8 @@ public final class DimensionHandoff {
 	 */
 	private static final long FADE_SUPPRESS_MS = 2000L;
 
+	/** Set by the server's travel announcement, consumed by the respawn that follows it. */
+	private static PortalLink travel;
 	private static List<ClientboundLevelChunkWithLightPacket> pendingChunks = List.of();
 	private static ChunkPos pendingCenter;
 
@@ -64,8 +67,15 @@ public final class DimensionHandoff {
 	private DimensionHandoff() {
 	}
 
+	/** The server is about to move the player through this portal pair (see {@link PortalTravelPayload}). */
+	public static void onTravel(PortalTravelPayload payload) {
+		travel = payload.link();
+	}
+
 	/** Respawn, on the main thread, before the old level is replaced. */
 	public static void beforeRespawn(ResourceKey<Level> newDimension) {
+		PortalLink announced = travel;
+		travel = null;
 		Minecraft minecraft = Minecraft.getInstance();
 		pendingChunks = List.of();
 		pendingCenter = null;
@@ -76,14 +86,15 @@ public final class DimensionHandoff {
 		if (remote == null || remote.center() == null || minecraft.player == null) {
 			return;
 		}
-		pendingChunks = remote.snapshotChunks();
-		pendingCenter = remote.center();
-
-		RemoteDimensions.Link crossed = PortalViewRenderer.crossedLink();
-		RemoteDimensions.Link used = crossed != null && crossed.dest() == newDimension ? crossed : nearestLinkTo(minecraft, newDimension);
-		if (used == null) {
+		// Only a walk through a linked portal, announced by the server, is handed off: a /tp,
+		// death or plugin teleport lands somewhere this view may have no terrain for, and its
+		// placement must be honoured.
+		if (announced == null || !announced.destDimension().equals(newDimension.identifier().toString())) {
 			return;
 		}
+		RemoteDimensions.Link used = new RemoteDimensions.Link(announced, PortalGeometry.of(announced), newDimension);
+		pendingChunks = remote.snapshotChunks();
+		pendingCenter = remote.center();
 		// The server placed the player from where it last saw them, and the client has kept
 		// moving since; carry the client's own position through the portal instead.
 		PortalGeometry geometry = used.geometry();
@@ -187,19 +198,5 @@ public final class DimensionHandoff {
 			player.snapTo(arrivalPosition.x, arrivalPosition.y, arrivalPosition.z, arrivalYRot, arrivalXRot);
 			player.setDeltaMovement(arrivalVelocity);
 		}
-	}
-
-	/** The linked portal into {@code dimension} nearest the player, if any. */
-	private static RemoteDimensions.Link nearestLinkTo(Minecraft minecraft, ResourceKey<Level> dimension) {
-		RemoteDimensions.Link best = null;
-		double bestDistance = 64.0;
-		for (RemoteDimensions.Link link : RemoteDimensions.links()) {
-			double distance = link.geometry().sourceCenter().distanceToSqr(minecraft.player.position());
-			if (link.dest() == dimension && distance < bestDistance) {
-				best = link;
-				bestDistance = distance;
-			}
-		}
-		return best;
 	}
 }

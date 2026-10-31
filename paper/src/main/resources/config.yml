@@ -1,0 +1,23 @@
+# Blocks around a player searched for portals to show through.
+scan-radius: 24
+# How many different portal destinations per player get their chunks and entities streamed
+# (nearest first). Clients render at most this many live portal views that look somewhere different.
+streamed-destinations: 2
+# Chunk radius streamed around each destination.
+view-radius-chunks: 4
+# Chunks sent per player every half second, across all destinations.
+chunks-per-scan: 8
+# Blocks around each destination whose mobs/players/items are mirrored to the viewer (0 = off).
+entity-radius: 24.0
+# Portals wider or taller than this (in portal blocks, frame not counted) stay normal vanilla
+# portals: no view through them and vanilla travel. 21 is the largest portal vanilla allows.
+max-portal-size: 21
+# Keep the area around a destination ticking while someone looks through (mobs move and spawn,
+# crops grow, farms run). Off by default: vanilla never runs the far side of a portal just
+# because a player stands near it, and farms may rely on that. When off, mobs over there are
+# shown frozen in place unless something else keeps those chunks running.
+tick-destination: false
+# Players with the client mod cross linked portals by walking through them (instant, keeps
+# momentum). Set to false to keep vanilla travel (standing in the portal, survival delay) for
+# everyone; the view through portals is still shown.
+seamless-travel: true

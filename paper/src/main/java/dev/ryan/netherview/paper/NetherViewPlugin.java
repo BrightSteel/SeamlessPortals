@@ -1,10 +1,12 @@
 package dev.ryan.netherview.paper;
 
 import dev.ryan.netherview.net.PortalLinksPayload;
+import dev.ryan.netherview.net.PortalTravelPayload;
 import dev.ryan.netherview.net.RemoteChunkPayload;
 import dev.ryan.netherview.net.RemoteEntitiesPayload;
 import dev.ryan.netherview.server.PayloadSender;
 import dev.ryan.netherview.server.PortalViewServer;
+import dev.ryan.netherview.server.ServerConfig;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.codec.StreamCodec;
@@ -27,6 +29,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 public final class NetherViewPlugin extends JavaPlugin implements Listener {
 	private static final String[] CHANNELS = {
 			PortalLinksPayload.ID.toString(),
+			PortalTravelPayload.ID.toString(),
 			RemoteChunkPayload.ID.toString(),
 			RemoteEntitiesPayload.ID.toString()
 	};
@@ -36,7 +39,17 @@ public final class NetherViewPlugin extends JavaPlugin implements Listener {
 		for (String channel : CHANNELS) {
 			this.getServer().getMessenger().registerOutgoingPluginChannel(this, channel);
 		}
-		PortalViewServer.init(new PluginMessageSender());
+		this.saveDefaultConfig();
+		ServerConfig defaults = ServerConfig.DEFAULTS;
+		PortalViewServer.init(new PluginMessageSender(), new ServerConfig(
+				this.getConfig().getInt("scan-radius", defaults.scanRadius()),
+				this.getConfig().getInt("streamed-destinations", defaults.streamedDestinations()),
+				this.getConfig().getInt("view-radius-chunks", defaults.viewRadiusChunks()),
+				this.getConfig().getInt("chunks-per-scan", defaults.chunksPerScan()),
+				this.getConfig().getDouble("entity-radius", defaults.entityRadius()),
+				this.getConfig().getInt("max-portal-size", defaults.maxPortalSize()),
+				this.getConfig().getBoolean("tick-destination", defaults.tickDestination()),
+				this.getConfig().getBoolean("seamless-travel", defaults.seamlessTravel())));
 		this.getServer().getPluginManager().registerEvents(this, this);
 		this.getServer().getScheduler().runTaskTimer(this, () -> PortalViewServer.tick(MinecraftServer.getServer()), 1L, 1L);
 	}

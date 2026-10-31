@@ -20,6 +20,7 @@ import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuSampler;
 import dev.ryan.netherview.client.RemoteDimensions.Link;
 import dev.ryan.netherview.client.mixin.GameRendererAccessor;
+import dev.ryan.netherview.client.mixin.LevelExtractorAccessor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -37,6 +38,9 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.util.Util;
 import net.minecraft.world.attribute.EnvironmentAttributeProbe;
 import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
@@ -45,7 +49,14 @@ import org.joml.Vector4f;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.OptionalDouble;
 
 /**
@@ -115,6 +126,34 @@ public final class PortalViewRenderer {
 	/** How long the camera may stay "through" a portal waiting for the server to move the player. */
 	private static final long CROSSED_TIMEOUT_MS = 2000L;
 
+	private static final RenderPipeline CARD_PIPELINE = RenderPipeline.builder(RenderPipelines.GLOBALS_SNIPPET)
+			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/portal_card"))
+			.withBindGroupLayout(BindGroupLayouts.PROJECTION)
+			.withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
+			.withVertexShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_view"))
+			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_card"))
+			.withVertexBinding(0, DefaultVertexFormat.POSITION)
+			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+			.withCull(false)
+			.withColorTargetState(ColorTargetState.DEFAULT)
+			.withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
+			.build();
+	/** Extra margin around a portal's screen rectangle when narrowing a view's culling frustum (NDC units). */
+	private static final float CULL_RECT_MARGIN = 0.05F;
+	/** How far beyond the opening a live portal is assumed to hide what's behind it (its frame). */
+	private static final double FRAME_OCCLUDER_MARGIN = 0.9;
+	/** Smallest half-size (NDC) of a narrowed culling rectangle; see {@link #narrowedToRect}. */
+	private static final float MIN_CULL_HALF_SIZE = 0.1F;
+
+	/** A live portal view rendered this frame, waiting to be composited. */
+	private record Pass(Link link, RemoteDimension view) {
+	}
+
+	private static final List<Pass> passes = new ArrayList<>();
+	private static final List<Link> cards = new ArrayList<>();
+	/** Which view each live portal (by its lowest block) used last frame, so it keeps its meshes and visibility. */
+	private static Map<BlockPos, RemoteDimension> assignments = new HashMap<>();
+
 	private static Link activeLink;
 	private static RemoteDimension bridgeRendered;
 	/** Set once the camera has passed through a linked portal and until the dimension actually changes. */
@@ -133,9 +172,12 @@ public final class PortalViewRenderer {
 	// ── 1. remote pass ──────────────────────────────────────────────────────
 
 	public static void renderRemoteView(Matrix4f levelProjection) {
+		PerfLog.frameStart();
 		activeLink = null;
 		activeRemote = null;
 		bridgeRendered = null;
+		passes.clear();
+		cards.clear();
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.level == null || minecraft.player == null) {
 			return;
@@ -149,25 +191,10 @@ public final class PortalViewRenderer {
 			renderCrossed(minecraft, main, levelProjection);
 			return;
 		}
-		Link link = pickLink(minecraft, main);
-		if (link == null) {
+		if (DevToggles.on("skipRemote")) {
 			return;
 		}
-		RemoteDimension remote = RemoteDimensions.get(link.dest());
-		if (remote == null) {
-			return;
-		}
-		try {
-			renderRemote(minecraft, main, link, remote, levelProjection);
-			activeLink = link;
-			activeRemote = remote;
-			lastRemoteTarget = remote.target;
-		} catch (RuntimeException e) {
-			if (!loggedFailure) {
-				loggedFailure = true;
-				LOGGER.error("Remote dimension pass failed; portal will show vanilla", e);
-			}
-		}
+		selectAndRender(minecraft, main, levelProjection);
 	}
 
 	/**
@@ -251,32 +278,212 @@ public final class PortalViewRenderer {
 		return crossedLink;
 	}
 
-	/** The nearest portal that is on screen and still exists. One remote pass per frame. */
-	private static Link pickLink(Minecraft minecraft, Camera main) {
+	/**
+	 * Choose this frame's live portals (nearest visible first, up to the configured budget and
+	 * distance), give each a view, and render them. Other visible linked portals get a card.
+	 */
+	private static void selectAndRender(Minecraft minecraft, Camera main, Matrix4f levelProjection) {
+		ClientConfig config = ClientConfig.get();
 		Frustum frustum = main.getCullFrustum();
-		Link best = null;
-		double bestDistance = Double.MAX_VALUE;
+		Vec3 eye = main.position();
+		List<Link> visible = new ArrayList<>();
 		for (Link link : RemoteDimensions.links()) {
-			if (!frustum.isVisible(link.geometry().sourceBox().inflate(0.25))) {
-				continue;
-			}
-			if (!minecraft.level.getBlockState(link.link().min()).is(Blocks.NETHER_PORTAL)) {
-				continue;
-			}
-			double distance = link.geometry().sourceCenter().distanceToSqr(main.position());
-			if (distance < bestDistance) {
-				bestDistance = distance;
-				best = link;
+			if (frustum.isVisible(link.geometry().sourceBox().inflate(0.25))
+					&& minecraft.level.getBlockState(link.link().min()).is(Blocks.NETHER_PORTAL)) {
+				visible.add(link);
 			}
 		}
-		return best;
+		visible.sort(Comparator.comparingDouble(link -> link.geometry().sourceCenter().distanceToSqr(eye)));
+
+		List<Link> live = new ArrayList<>();
+		List<float[]> liveQuads = new ArrayList<>();
+		Matrix4f viewProjection = new Matrix4f(levelProjection).mul(main.getViewRotationMatrix(new Matrix4f()));
+		double maxDistanceSqr = config.effectiveLiveViewDistance() * config.effectiveLiveViewDistance();
+		for (Link link : visible) {
+			float[] quad = screenQuad(link, eye, viewProjection, 0.0);
+			if (quad != null && liveQuads.stream().anyMatch(cover -> covers(cover, quad))) {
+				continue; // entirely behind a nearer live portal (e.g. a chain of portals): nothing to see
+			}
+			if (live.size() < config.effectiveMaxLivePortals() && link.geometry().sourceCenter().distanceToSqr(eye) <= maxDistanceSqr) {
+				live.add(link);
+				// The occluder is the window plus its solid obsidian frame (most of a block wide;
+				// the frame's corner blocks are optional, hence a little less than a full block).
+				float[] occluder = screenQuad(link, eye, viewProjection, FRAME_OCCLUDER_MARGIN);
+				if (occluder != null) {
+					liveQuads.add(occluder);
+				}
+			} else {
+				cards.add(link);
+			}
+		}
+
+		Map<BlockPos, RemoteDimension> assigned = assignViews(live);
+		for (Link link : live) {
+			RemoteDimension view = assigned.get(link.link().min());
+			Vector4f rect = screenRect(link, main, levelProjection);
+			if (rect == null) {
+				continue; // entirely off screen after all
+			}
+			try {
+				renderRemote(minecraft, main, link, view, levelProjection, rect);
+				passes.add(new Pass(link, view));
+				lastRemoteTarget = view.target;
+			} catch (RuntimeException e) {
+				if (!loggedFailure) {
+					loggedFailure = true;
+					LOGGER.error("Remote dimension pass failed; portal will show a card", e);
+				}
+				cards.add(link);
+			}
+		}
+		assignments = assigned;
 	}
 
-	private static void renderRemote(Minecraft minecraft, Camera main, Link link, RemoteDimension remote, Matrix4f levelProjection) {
+	/**
+	 * The portal opening's corners on screen (NDC x, y pairs, in order around the opening),
+	 * or null if any corner is behind the camera.
+	 */
+	private static float[] screenQuad(Link link, Vec3 eye, Matrix4f viewProjection, double margin) {
+		Vec3[] corners = link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET, margin);
+		float[] quad = new float[8];
+		for (int i = 0; i < 4; i++) {
+			Vec3 relative = corners[i].subtract(eye);
+			Vector4f clip = viewProjection.transform(new Vector4f((float) relative.x, (float) relative.y, (float) relative.z, 1.0F));
+			if (clip.w < 0.05F) {
+				return null;
+			}
+			quad[i * 2] = clip.x / clip.w;
+			quad[i * 2 + 1] = clip.y / clip.w;
+		}
+		return quad;
+	}
+
+	/** Whether every corner of {@code inner} lies inside the convex quad {@code outer}. */
+	private static boolean covers(float[] outer, float[] inner) {
+		for (int i = 0; i < 4; i++) {
+			if (!insideConvex(outer, inner[i * 2], inner[i * 2 + 1])) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean insideConvex(float[] quad, float x, float y) {
+		int sign = 0;
+		for (int i = 0; i < 4; i++) {
+			float ax = quad[i * 2];
+			float ay = quad[i * 2 + 1];
+			float bx = quad[(i + 1) % 4 * 2];
+			float by = quad[(i + 1) % 4 * 2 + 1];
+			float cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+			int side = cross > 0 ? 1 : cross < 0 ? -1 : 0;
+			if (side != 0) {
+				if (sign == 0) {
+					sign = side;
+				} else if (side != sign) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Gives each live portal a view of its destination dimension. A portal keeps last frame's
+	 * view when it can; the rest take free views, which are re-centred on their new destination.
+	 */
+	private static Map<BlockPos, RemoteDimension> assignViews(List<Link> live) {
+		Map<BlockPos, RemoteDimension> assigned = new HashMap<>();
+		Set<RemoteDimension> used = new HashSet<>();
+		List<Link> unassigned = new ArrayList<>();
+		for (Link link : live) {
+			RemoteDimension previous = assignments.get(link.link().min());
+			if (previous != null && previous.key == link.dest() && !previous.isClosed() && used.add(previous)) {
+				assigned.put(link.link().min(), previous);
+			} else {
+				unassigned.add(link);
+			}
+		}
+		for (Link link : unassigned) {
+			RemoteDimension view = null;
+			for (int index = 0; view == null; index++) {
+				RemoteDimension candidate = RemoteDimensions.view(link.dest(), index);
+				if (used.add(candidate)) {
+					view = candidate;
+				}
+			}
+			RemoteDimensions.recenter(view, ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
+			assigned.put(link.link().min(), view);
+		}
+		return assigned;
+	}
+
+	/**
+	 * The portal opening's bounding rectangle on screen, in NDC (xMin, yMin, xMax, yMax),
+	 * or null if it is entirely off screen. If any corner is behind the camera the whole
+	 * screen is returned, since the projection can't bound it.
+	 */
+	private static Vector4f screenRect(Link link, Camera main, Matrix4f levelProjection) {
+		Matrix4f viewProjection = new Matrix4f(levelProjection).mul(main.getViewRotationMatrix(new Matrix4f()));
+		float xMin = Float.MAX_VALUE;
+		float yMin = Float.MAX_VALUE;
+		float xMax = -Float.MAX_VALUE;
+		float yMax = -Float.MAX_VALUE;
+		Vec3 eye = main.position();
+		for (Vec3 corner : link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET)) {
+			Vec3 relative = corner.subtract(eye);
+			Vector4f clip = viewProjection.transform(new Vector4f((float) relative.x, (float) relative.y, (float) relative.z, 1.0F));
+			if (clip.w < 0.05F) {
+				return new Vector4f(-1.0F, -1.0F, 1.0F, 1.0F);
+			}
+			xMin = Math.min(xMin, clip.x / clip.w);
+			yMin = Math.min(yMin, clip.y / clip.w);
+			xMax = Math.max(xMax, clip.x / clip.w);
+			yMax = Math.max(yMax, clip.y / clip.w);
+		}
+		if (xMax < -1.0F || xMin > 1.0F || yMax < -1.0F || yMin > 1.0F) {
+			return null;
+		}
+		return new Vector4f(
+				Math.max(-1.0F, xMin - CULL_RECT_MARGIN), Math.max(-1.0F, yMin - CULL_RECT_MARGIN),
+				Math.min(1.0F, xMax + CULL_RECT_MARGIN), Math.min(1.0F, yMax + CULL_RECT_MARGIN));
+	}
+
+	/**
+	 * A projection whose frustum covers only {@code rect} of the screen: only used for culling,
+	 * so the far side's sections and entities are tested against the portal's own slice of
+	 * the view and a small or distant portal extracts only what can be seen through it.
+	 *
+	 * <p>Uses the ordinary projection, not the oblique one: vanilla's visibility pass slides
+	 * the culling frustum back until an 8-block cube around the camera fits inside, which
+	 * never happens once the oblique near/far planes are in it (an endless loop). The
+	 * rectangle also has a minimum size, so the slide always ends a bounded distance back.</p>
+	 */
+	private static Matrix4f narrowedToRect(Matrix4f projection, Vector4f rect) {
+		float halfWidth = Math.max(MIN_CULL_HALF_SIZE, (rect.z - rect.x) / 2.0F);
+		float halfHeight = Math.max(MIN_CULL_HALF_SIZE, (rect.w - rect.y) / 2.0F);
+		float centerX = (rect.z + rect.x) / 2.0F;
+		float centerY = (rect.w + rect.y) / 2.0F;
+		// In clip space x' = (x - cx·w) / hw (and likewise y): after the divide, the
+		// rectangle's NDC range becomes [-1, 1]. Column-major arguments.
+		Matrix4f clipRemap = new Matrix4f(
+				1.0F / halfWidth, 0.0F, 0.0F, 0.0F,
+				0.0F, 1.0F / halfHeight, 0.0F, 0.0F,
+				0.0F, 0.0F, 1.0F, 0.0F,
+				-centerX / halfWidth, -centerY / halfHeight, 0.0F, 1.0F);
+		return clipRemap.mul(projection, new Matrix4f());
+	}
+
+	private static void renderRemote(Minecraft minecraft, Camera main, Link link, RemoteDimension remote, Matrix4f levelProjection, Vector4f rect) {
 		PortalGeometry geometry = link.geometry();
 		Vec3 remoteEye = geometry.toDest(main.position());
-		remote.camera.place(main, remote.level, remoteEye, geometry.toDestYaw(main.yRot()), main.xRot());
+		float yRot = geometry.toDestYaw(main.yRot());
+		// Place once to get the view rotation for the clip plane, then again with the culling
+		// frustum narrowed to the portal (the rotation is unchanged, so the plane still holds).
+		remote.camera.place(main, remote.level, remoteEye, yRot, main.xRot());
 		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye));
+		remote.camera.place(main, remote.level, remoteEye, yRot, main.xRot(), narrowedToRect(levelProjection, rect));
+		((LevelExtractorAccessor) remote.extractor).netherview$setPrevCamRotX(Double.NaN);
 		renderLevelInto(minecraft, main, remote, remoteEye, projection);
 	}
 
@@ -286,6 +493,15 @@ public final class PortalViewRenderer {
 	 * for the duration.
 	 */
 	private static void renderLevelInto(Minecraft minecraft, Camera main, RemoteDimension remote, Vec3 remoteEye, Matrix4f projection) {
+		long start = System.nanoTime();
+		try {
+			renderLevelIntoTimed(minecraft, main, remote, remoteEye, projection);
+		} finally {
+			PerfLog.remotePass(System.nanoTime() - start);
+		}
+	}
+
+	private static void renderLevelIntoTimed(Minecraft minecraft, Camera main, RemoteDimension remote, Vec3 remoteEye, Matrix4f projection) {
 		GameRenderer gameRenderer = minecraft.gameRenderer;
 		GameRendererAccessor gameRendererAccess = (GameRendererAccessor) gameRenderer;
 		RenderTarget mainTarget = gameRenderer.mainRenderTarget();
@@ -300,7 +516,7 @@ public final class PortalViewRenderer {
 		remote.camera.extractRenderState(cameraState, delta);
 		cameraState.fogType = remote.camera.getFluidInCamera();
 		cameraState.fogData = remote.fog.setupFog(
-				remote.camera, minecraft.options.getEffectiveRenderDistance(), delta, gameRenderer.bossOverlayWorldDarkening(partialTicks), remote.level);
+				remote.camera, Math.min(minecraft.options.getEffectiveRenderDistance(), ClientConfig.get().effectiveRemoteRenderDistance()), delta, gameRenderer.bossOverlayWorldDarkening(partialTicks), remote.level);
 		remote.extractor.extract(delta, remote.camera, partialTicks);
 		remote.renderState.playerCompiledSectionCallback = null;
 		// Extraction pointed the shared dispatchers at the remote camera; point them back.
@@ -417,6 +633,9 @@ public final class PortalViewRenderer {
 		activeLink = null;
 		activeRemote = null;
 		bridgeRendered = null;
+		passes.clear();
+		cards.clear();
+		assignments = new HashMap<>();
 		crossedLink = null;
 		activeFullscreen = false;
 		lastEye = null;
@@ -465,23 +684,51 @@ public final class PortalViewRenderer {
 	}
 
 	private static void compositeAll() {
+		if (DevToggles.on("skipComposite")) {
+			activeLink = null;
+			activeRemote = null;
+			bridgeRendered = null;
+			return;
+		}
 		RemoteDimension bridge = bridgeRendered;
 		bridgeRendered = null;
 		if (bridge != null) {
 			blitFullscreen(Minecraft.getInstance().gameRenderer.mainRenderTarget(), bridge, MERGE_PIPELINE);
 		}
-		Link link = activeLink;
-		RemoteDimension remote = activeRemote;
+		Link crossed = activeLink;
+		RemoteDimension crossedView = activeRemote;
 		activeLink = null;
 		activeRemote = null;
-		if (link == null || remote == null) {
-			return;
-		}
-		if (activeFullscreen) {
+		if (crossed != null && crossedView != null && activeFullscreen) {
 			activeFullscreen = false;
-			blitFullscreen(Minecraft.getInstance().gameRenderer.mainRenderTarget(), remote, REPLACE_PIPELINE);
+			blitFullscreen(Minecraft.getInstance().gameRenderer.mainRenderTarget(), crossedView, REPLACE_PIPELINE);
 			return;
 		}
+		for (Pass pass : passes) {
+			drawWindow(pass.link(), pass.view(), null);
+		}
+		for (Link card : cards) {
+			drawWindow(card, null, cardColor(card));
+		}
+		passes.clear();
+		cards.clear();
+	}
+
+	/** The far side's fog colour, from whichever view of it last rendered, or a per-dimension guess. */
+	private static Vector4f cardColor(Link link) {
+		RemoteDimension view = RemoteDimensions.get(link.dest());
+		if (view != null && view.renderState.cameraRenderState.fogData != null) {
+			Vector4f fog = view.renderState.cameraRenderState.fogData.color;
+			return new Vector4f(fog.x, fog.y, fog.z, 1.0F);
+		}
+		return link.dest() == Level.NETHER ? new Vector4f(0.2F, 0.03F, 0.03F, 1.0F) : new Vector4f(0.62F, 0.75F, 1.0F, 1.0F);
+	}
+
+	/**
+	 * Draws a portal opening into the main framebuffer: sampling {@code view}'s offscreen image
+	 * by screen position, or (with no view) as a flat card in {@code color}.
+	 */
+	private static void drawWindow(Link link, RemoteDimension view, Vector4f color) {
 		Minecraft minecraft = Minecraft.getInstance();
 		GameRenderer gameRenderer = minecraft.gameRenderer;
 		RenderTarget mainTarget = gameRenderer.mainRenderTarget();
@@ -512,15 +759,19 @@ public final class PortalViewRenderer {
 			try (MeshData mesh = builder.buildOrThrow()) {
 				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> "netherview portal window", GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
 				try {
-					GpuBufferSlice transforms = RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix));
+					GpuBufferSlice transforms = color == null
+							? RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix))
+							: RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix), color);
 					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
 					try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
 							() -> "netherview portal window", mainTarget.getColorTextureView(), Optional.empty(),
 							mainTarget.getDepthTextureView(), OptionalDouble.empty())) {
-						pass.setPipeline(RenderSystem.getCompiledPipeline(COMPOSITE_PIPELINE));
+						pass.setPipeline(RenderSystem.getCompiledPipeline(view != null ? COMPOSITE_PIPELINE : CARD_PIPELINE));
 						RenderSystem.bindDefaultUniforms(pass);
 						pass.setUniform("DynamicTransforms", transforms);
-						pass.setUniform("Sampler0", remote.target.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+						if (view != null) {
+							pass.setUniform("Sampler0", view.target.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+						}
 						pass.setVertexBuffer(0, vertices.slice());
 						pass.draw(triangles.length, 1, 0, 0);
 					}

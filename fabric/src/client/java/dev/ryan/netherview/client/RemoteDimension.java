@@ -63,6 +63,7 @@ public final class RemoteDimension implements AutoCloseable {
 	TextureTarget target;
 	private ChunkPos center;
 	private boolean probePrimed;
+	private boolean closed;
 
 	RemoteDimension(Minecraft minecraft, ResourceKey<Level> key) {
 		this.key = key;
@@ -142,6 +143,24 @@ public final class RemoteDimension implements AutoCloseable {
 		return CHUNK_RADIUS;
 	}
 
+	/** Copy over the chunks around this view's centre that {@code source} has and this view doesn't. */
+	void seedFrom(RemoteDimension source) {
+		if (this.center == null) {
+			return;
+		}
+		for (int x = this.center.x() - CHUNK_RADIUS; x <= this.center.x() + CHUNK_RADIUS; x++) {
+			for (int z = this.center.z() - CHUNK_RADIUS; z <= this.center.z() + CHUNK_RADIUS; z++) {
+				if (this.level.getChunkSource().getChunk(x, z, false) != null) {
+					continue;
+				}
+				LevelChunk chunk = source.level.getChunkSource().getChunk(x, z, false);
+				if (chunk != null) {
+					this.acceptChunk(new ClientboundLevelChunkWithLightPacket(chunk, source.level.getLightEngine(), null, null));
+				}
+			}
+		}
+	}
+
 	/** Same steps as ClientPacketListener.handleLevelChunkWithLight, aimed at this level. */
 	void acceptChunk(ClientboundLevelChunkWithLightPacket packet) {
 		int x = packet.x();
@@ -204,8 +223,13 @@ public final class RemoteDimension implements AutoCloseable {
 		}
 	}
 
+	boolean isClosed() {
+		return this.closed;
+	}
+
 	@Override
 	public void close() {
+		this.closed = true;
 		this.extractor.setLevel(null);
 		this.renderer.close();
 		this.fog.close();

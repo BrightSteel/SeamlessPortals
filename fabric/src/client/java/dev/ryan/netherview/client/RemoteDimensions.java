@@ -1,9 +1,9 @@
 package dev.ryan.netherview.client;
 
 import dev.ryan.netherview.PortalGeometry;
+import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
 import dev.ryan.netherview.net.PortalLink;
 import dev.ryan.netherview.net.PortalLinksPayload;
-import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
 import dev.ryan.netherview.net.RemoteChunkPayload;
 import dev.ryan.netherview.net.RemoteEntitiesPayload;
 import io.netty.buffer.ByteBuf;
@@ -11,6 +11,8 @@ import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.SectionOcclusionGraph;
 import net.minecraft.client.renderer.extract.LevelExtractor;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -18,12 +20,11 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
-import net.minecraft.network.protocol.game.GameProtocols;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.GameProtocols;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.util.Util;
 import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,15 +32,23 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Set;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-/** Client-side state: the portals around the player and the remote dimensions they look into. */
+/**
+ * Client-side state: the portals around the player and the remote dimensions they look into.
+ *
+ * <p>Each remote dimension has one or more <em>views</em>: complete client copies of that
+ * dimension (level, renderer, camera, offscreen target). Every live portal needs its own,
+ * because a renderer's visibility state and meshes follow its camera; sharing one between
+ * portals would rebuild them every pass. Chunk and entity updates go to every view of the
+ * dimension; view 0 is the primary, used for crossing and the arrival hand-off.</p>
+ */
 public final class RemoteDimensions {
 	private static final Logger LOGGER = LoggerFactory.getLogger("netherview");
 
-	private static final Map<ResourceKey<Level>, RemoteDimension> REMOTES = new HashMap<>();
+	private static final Map<ResourceKey<Level>, List<RemoteDimension>> VIEWS = new HashMap<>();
 	private static List<Link> links = List.of();
 	private static ClientLevel trackedLevel;
 	/** The remote that showed the dimension the player just walked into; see {@link PortalViewRenderer}. */
@@ -65,6 +74,78 @@ public final class RemoteDimensions {
 		return bridge;
 	}
 
+	/** The primary view of {@code key}, if that dimension has been seen. */
+	public static RemoteDimension get(ResourceKey<Level> key) {
+		List<RemoteDimension> views = VIEWS.get(key);
+		return views == null || views.isEmpty() ? null : views.getFirst();
+	}
+
+	/**
+	 * View {@code index} of {@code key}, creating views up to it. A new view starts with the
+	 * primary's chunks, so it has terrain before the server sends anything more.
+	 */
+	static RemoteDimension view(ResourceKey<Level> key, int index) {
+		Minecraft minecraft = Minecraft.getInstance();
+		List<RemoteDimension> views = VIEWS.computeIfAbsent(key, k -> new ArrayList<>());
+		while (views.size() <= index) {
+			views.add(new RemoteDimension(minecraft, key));
+			publishRemoteLevels();
+		}
+		return views.get(index);
+	}
+
+	/** Point a view at a new destination and give it whatever chunks its siblings have there. */
+	static void recenter(RemoteDimension view, ChunkPos center) {
+		if (center.equals(view.center())) {
+			return;
+		}
+		view.centerOn(center);
+		for (RemoteDimension sibling : VIEWS.getOrDefault(view.key, List.of())) {
+			if (sibling != view) {
+				view.seedFrom(sibling);
+			}
+		}
+	}
+
+	/** Re-mesh these positions in every remote view (portal hiding changed there). */
+	static void markBlocksDirty(Set<BlockPos> positions) {
+		if (positions.isEmpty()) {
+			return;
+		}
+		for (RemoteDimension view : allViews()) {
+			for (BlockPos pos : positions) {
+				view.extractor.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+			}
+		}
+	}
+
+	public static boolean isRemoteExtractor(LevelExtractor extractor) {
+		for (RemoteDimension view : allViews()) {
+			if (view.extractor == extractor) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public static boolean isRemoteGraph(SectionOcclusionGraph graph) {
+		for (RemoteDimension view : allViews()) {
+			if (view.renderer.sectionOcclusionGraph() == graph) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public static boolean isRemoteRenderer(LevelRenderer renderer) {
+		for (RemoteDimension view : allViews()) {
+			if (view.renderer == renderer) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * The player just came through {@code back}'s destination: install the way back right
 	 * away (so that portal is a window from the first frame, not a swirl until the server's
@@ -74,7 +155,7 @@ public final class RemoteDimensions {
 		Minecraft minecraft = Minecraft.getInstance();
 		syncLevel(minecraft);
 		Link link = new Link(back, PortalGeometry.of(back), backDimension);
-		RemoteDimension remote = ensure(minecraft, backDimension);
+		RemoteDimension remote = view(backDimension, 0);
 		remote.centerOn(ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
 		for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
 			remote.acceptChunk(chunk);
@@ -83,15 +164,17 @@ public final class RemoteDimensions {
 		PortalHiding.setLinks(links);
 	}
 
-	/** Keep the remote for {@code dimension} alive as the bridge while the main renderer meshes the new level. */
+	/** Keep the primary view of {@code dimension} alive as the bridge while the main renderer meshes the new level. */
 	static void adoptAsBridge(ResourceKey<Level> dimension) {
-		RemoteDimension remote = REMOTES.remove(dimension);
-		if (remote == null) {
+		List<RemoteDimension> views = VIEWS.remove(dimension);
+		if (views == null || views.isEmpty()) {
 			return;
 		}
 		closeBridge();
-		bridge = remote;
+		bridge = views.removeFirst();
 		bridgeTicks = 0;
+		PortalViewRenderer.forgetRemotes();
+		views.forEach(RemoteDimension::close);
 		publishRemoteLevels();
 	}
 
@@ -104,19 +187,6 @@ public final class RemoteDimensions {
 		}
 	}
 
-	public static RemoteDimension get(ResourceKey<Level> key) {
-		return REMOTES.get(key);
-	}
-
-	public static boolean isRemoteExtractor(LevelExtractor extractor) {
-		for (RemoteDimension remote : REMOTES.values()) {
-			if (remote.extractor == extractor) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	public static void onLinks(PortalLinksPayload payload) {
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.level == null) {
@@ -126,17 +196,21 @@ public final class RemoteDimensions {
 		List<Link> resolved = new ArrayList<>();
 		for (PortalLink link : payload.links()) {
 			ResourceKey<Level> dest = ResourceKey.create(Registries.DIMENSION, Identifier.parse(link.destDimension()));
-			if (dest == minecraft.level.dimension()) {
-				continue;
+			int maxSize = ClientConfig.get().maxPortalSize;
+			if (dest == minecraft.level.dimension() || link.width() > maxSize || link.height() > maxSize) {
+				continue; // too big for this client: left as a vanilla portal
 			}
 			resolved.add(new Link(link, PortalGeometry.of(link), dest));
 		}
 		links = List.copyOf(resolved);
 		PortalHiding.setLinks(links);
 		if (!resolved.isEmpty()) {
-			// The server streams the nearest portal's destination; keep that window loaded.
+			// The primary view follows the nearest portal until the renderer assigns views.
 			Link nearest = resolved.getFirst();
-			ensure(minecraft, nearest.dest()).centerOn(ChunkPos.containing(BlockPos.containing(nearest.geometry().destCenter())));
+			RemoteDimension primary = view(nearest.dest(), 0);
+			if (primary.center() == null) {
+				primary.centerOn(ChunkPos.containing(BlockPos.containing(nearest.geometry().destCenter())));
+			}
 		}
 	}
 
@@ -153,7 +227,10 @@ public final class RemoteDimensions {
 		RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.wrappedBuffer(payload.chunkPacket()), minecraft.getConnection().registryAccess());
 		try {
 			ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC.decode(buf);
-			ensure(minecraft, dest).acceptChunk(packet);
+			view(dest, 0);
+			for (RemoteDimension view : VIEWS.get(dest)) {
+				view.acceptChunk(packet);
+			}
 		} catch (RuntimeException e) {
 			LOGGER.warn("Dropping remote chunk for {}: {}", dest.identifier(), e.toString());
 		} finally {
@@ -172,25 +249,35 @@ public final class RemoteDimensions {
 		if (dest == minecraft.level.dimension()) {
 			return;
 		}
-		RemoteDimension remote = ensure(minecraft, dest);
+		view(dest, 0);
 		if (entityCodecRegistries != connection.registryAccess()) {
 			entityCodec = GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(connection.registryAccess())).codec();
 			entityCodecRegistries = connection.registryAccess();
 		}
+		List<Packet<ClientGamePacketListener>> packets = new ArrayList<>();
+		for (byte[] bytes : payload.packets()) {
+			ByteBuf buf = Unpooled.wrappedBuffer(bytes);
+			try {
+				@SuppressWarnings("unchecked")
+				Packet<ClientGamePacketListener> packet = (Packet<ClientGamePacketListener>) entityCodec.decode(buf);
+				packets.add(packet);
+			} catch (RuntimeException e) {
+				LOGGER.debug("Dropping remote entity packet for {}: {}", dest.identifier(), e.toString());
+			} finally {
+				buf.release();
+			}
+		}
 		ClientPacketListenerAccessor listener = (ClientPacketListenerAccessor) connection;
 		ClientLevel playerLevel = listener.netherview$getLevel();
-		listener.netherview$setLevel(remote.level);
 		try {
-			for (byte[] bytes : payload.packets()) {
-				ByteBuf buf = Unpooled.wrappedBuffer(bytes);
-				try {
-					@SuppressWarnings("unchecked")
-					Packet<ClientGamePacketListener> packet = (Packet<ClientGamePacketListener>) entityCodec.decode(buf);
-					packet.handle(connection);
-				} catch (RuntimeException e) {
-					LOGGER.debug("Dropping remote entity packet for {}: {}", dest.identifier(), e.toString());
-				} finally {
-					buf.release();
+			for (RemoteDimension view : VIEWS.get(dest)) {
+				listener.netherview$setLevel(view.level);
+				for (Packet<ClientGamePacketListener> packet : packets) {
+					try {
+						packet.handle(connection);
+					} catch (RuntimeException e) {
+						LOGGER.debug("Remote entity packet failed for {}: {}", dest.identifier(), e.toString());
+					}
 				}
 			}
 		} finally {
@@ -203,8 +290,10 @@ public final class RemoteDimensions {
 		if (minecraft.level == null) {
 			return;
 		}
-		for (RemoteDimension remote : REMOTES.values()) {
-			remote.tick(minecraft.level);
+		for (RemoteDimension view : allViews()) {
+			if (view != bridge) {
+				view.tick(minecraft.level);
+			}
 		}
 		if (bridge != null) {
 			bridge.tick(minecraft.level);
@@ -228,31 +317,27 @@ public final class RemoteDimensions {
 
 	private static void clearRemotes() {
 		PortalViewRenderer.forgetRemotes();
-		REMOTES.values().forEach(RemoteDimension::close);
-		REMOTES.clear();
+		VIEWS.values().forEach(views -> views.forEach(RemoteDimension::close));
+		VIEWS.clear();
 		publishRemoteLevels();
 		links = List.of();
 		PortalHiding.setLinks(links);
 		trackedLevel = null;
 	}
 
-	private static RemoteDimension ensure(Minecraft minecraft, ResourceKey<Level> key) {
-		RemoteDimension remote = REMOTES.get(key);
-		if (remote == null) {
-			remote = new RemoteDimension(minecraft, key);
-			REMOTES.put(key, remote);
-			publishRemoteLevels();
+	private static List<RemoteDimension> allViews() {
+		List<RemoteDimension> all = new ArrayList<>();
+		VIEWS.values().forEach(all::addAll);
+		if (bridge != null) {
+			all.add(bridge);
 		}
-		return remote;
+		return all;
 	}
 
 	private static void publishRemoteLevels() {
 		Set<ClientLevel> levels = new HashSet<>();
-		for (RemoteDimension remote : REMOTES.values()) {
-			levels.add(remote.level);
-		}
-		if (bridge != null) {
-			levels.add(bridge.level);
+		for (RemoteDimension view : allViews()) {
+			levels.add(view.level);
 		}
 		PortalHiding.setRemoteLevels(levels);
 	}

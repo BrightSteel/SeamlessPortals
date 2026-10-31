@@ -44,8 +44,8 @@ import java.util.function.Predicate;
  * entity data / equipment every {@link #FULL_SYNC_TICKS}.</p>
  */
 final class RemoteEntityTracker {
-	private static final double HORIZONTAL_RADIUS = 24.0;
-	private static final double VERTICAL_RADIUS = 16.0;
+	/** Vertical reach as a fraction of the horizontal radius; portals look across more than up. */
+	private static final double VERTICAL_FRACTION = 2.0 / 3.0;
 	private static final int FULL_SYNC_TICKS = 10;
 	private static final ServerEntity.Synchronizer NO_BROADCAST = new ServerEntity.Synchronizer() {
 		@Override
@@ -65,7 +65,7 @@ final class RemoteEntityTracker {
 	private String dimension;
 
 	/** Packets that bring the client's copy of {@code level} around {@code center} up to date. */
-	List<byte[]> update(ServerPlayer player, ServerLevel level, String dimension, Vec3 center, int now) {
+	List<byte[]> update(ServerPlayer player, ServerLevel level, String dimension, List<Vec3> centers, double radius, int now) {
 		List<byte[]> out = new ArrayList<>();
 		if (!dimension.equals(this.dimension)) {
 			// A new remote level on the client starts empty.
@@ -73,13 +73,22 @@ final class RemoteEntityTracker {
 			this.dimension = dimension;
 		}
 		StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> codec = codec(level);
-		AABB area = new AABB(center, center).inflate(HORIZONTAL_RADIUS, VERTICAL_RADIUS, HORIZONTAL_RADIUS);
 		IntSet present = new IntOpenHashSet();
 		boolean fullSync = now % FULL_SYNC_TICKS == 0;
+		List<Entity> nearby = new ArrayList<>();
+		if (radius > 0) {
+			for (Vec3 center : centers) {
+				AABB area = new AABB(center, center).inflate(radius, radius * VERTICAL_FRACTION, radius);
+				for (Entity entity : level.getEntities((Entity) null, area, e -> !e.isRemoved())) {
+					if (present.add(entity.getId())) {
+						nearby.add(entity);
+					}
+				}
+			}
+		}
 
-		for (Entity entity : level.getEntities((Entity) null, area, e -> !e.isRemoved())) {
+		for (Entity entity : nearby) {
 			int id = entity.getId();
-			present.add(id);
 			if (this.tracked.add(id)) {
 				newServerEntity(level, entity)
 						.sendPairingData(player, packet -> out.add(encode(codec, packet)));
