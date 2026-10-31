@@ -1,0 +1,40 @@
+plugins {
+	id 'java'
+	id 'io.papermc.paperweight.userdev' version '2.0.0-beta.21'
+}
+
+base {
+	archivesName = 'netherview-paper'
+}
+
+repositories {
+	mavenCentral()
+	maven {
+		name = 'PaperMC'
+		url = 'https://repo.papermc.io/repository/maven-public/'
+	}
+}
+
+dependencies {
+	paperweight.paperDevBundle('26.3.build.+')
+}
+
+// Server half (portal discovery, chunk/entity streaming, travel) shared with the Fabric mod.
+sourceSets.main.java.srcDir rootProject.file('common/src/main/java')
+
+java {
+	toolchain.languageVersion = JavaLanguageVersion.of(25)
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release = 25
+}
+
+processResources {
+	def props = [version: project.version]
+	inputs.properties props
+	filesMatching('plugin.yml') {
+		expand props
+	}
+}

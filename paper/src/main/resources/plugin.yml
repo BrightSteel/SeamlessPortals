@@ -1,0 +1,5 @@
+name: NetherView
+version: '${version}'
+main: dev.ryan.netherview.paper.NetherViewPlugin
+api-version: '1.21'
+description: Streams the far side of nether portals to players running the NetherView client mod, and makes linked portals walk-through.

@@ -1,0 +1,62 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+base {
+	archivesName = 'netherview-fabric'
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	runs {
+		// Joins run/saves/NetherViewTest directly (generate it with runServer + the nvtest datapack).
+		testClient {
+			client()
+			name = "Test Client"
+			programArgs "--quickPlaySingleplayer", "NetherViewTest"
+			vmArgs "-Dnetherview.devCapture=true"
+		}
+		// Joins the local Paper test server in paper/run (port 25571).
+		paperTestClient {
+			client()
+			name = "Paper Test Client"
+			programArgs "--quickPlayMultiplayer", "localhost:25571"
+			vmArgs "-Dnetherview.devCapture=true"
+		}
+	}
+
+	mods {
+		"netherview" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+// Server half (portal discovery, chunk/entity streaming, travel) shared with the Paper plugin.
+sourceSets.main.java.srcDir rootProject.file('common/src/main/java')
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}

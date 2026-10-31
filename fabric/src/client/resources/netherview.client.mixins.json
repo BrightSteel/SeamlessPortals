@@ -1,0 +1,21 @@
+{
+	"required": true,
+	"package": "dev.ryan.netherview.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"CameraAccessor",
+		"ClientPacketListenerAccessor",
+		"ClientPacketListenerMixin",
+		"CloudRendererInvoker",
+		"GameRendererAccessor",
+		"GameRendererMixin",
+		"LevelExtractorMixin",
+		"LevelRendererAccessor",
+		"LocalPlayerMixin",
+		"RenderSectionRegionAccessor",
+		"SectionCompilerMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

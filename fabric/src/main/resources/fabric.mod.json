@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "netherview",
+	"version": "${version}",
+	"name": "NetherView",
+	"description": "Nether portals render the dimension on the other side instead of the portal swirl. Client-only: servers need the NetherView Paper plugin (singleplayer works on its own).",
+	"authors": ["Ryan"],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"main": ["dev.ryan.netherview.NetherView"],
+		"client": ["dev.ryan.netherview.client.NetherViewClient"]
+	},
+	"mixins": [
+		"netherview.mixins.json",
+		{
+			"config": "netherview.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
