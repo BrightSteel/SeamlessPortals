@@ -8,6 +8,9 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.FriendlyByteBuf;
 import io.netty.buffer.Unpooled;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.protocol.Packet;
@@ -26,7 +29,6 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -52,15 +54,24 @@ final class FallbackWindows {
 	private static final int UPDATE_INTERVAL = 2;
 	/** Eye movement that triggers a redraw between scheduled ones. */
 	private static final double MOVE_EPSILON = 0.05;
-	/** Every this many ticks the whole view is re-sent (the real block may have been re-sent over it). */
-	private static final int FULL_RESEND_TICKS = 40;
+	/** A player standing still is redrawn this often (the destination may have changed). */
+	private static final int STILL_INTERVAL = 20;
+	/**
+	 * Every this many ticks the whole view is re-sent anyway. Real block changes under a fake
+	 * are caught on each redraw; this is the backstop for chunks the client was sent again.
+	 */
+	private static final int FULL_RESEND_TICKS = 200;
 	/** Packets per bundle (the client refuses bundles over 4096). */
 	private static final int MAX_BUNDLE = 1024;
 
+	/** A fake block the client has, and the real block it covers (as it was when we sent it). */
+	private record Shown(BlockState fake, BlockState real) {
+	}
+
 	private static final class State {
 		List<PortalLink> links = List.of();
-		/** Fake blocks the client currently has → what we sent. */
-		Map<BlockPos, BlockState> shown = new HashMap<>();
+		/** By {@link BlockPos#asLong()}, as are the other block maps here: tens of thousands of entries per redraw. */
+		Long2ObjectMap<Shown> shown = new Long2ObjectOpenHashMap<>();
 		ResourceKey<Level> level;
 		Vec3 lastEye;
 		int lastFull;
@@ -93,12 +104,12 @@ final class FallbackWindows {
 		if (!full && now % UPDATE_INTERVAL != 0 && state.lastEye != null) {
 			return;
 		}
-		if (!full && state.lastEye != null && state.lastEye.distanceToSqr(eye) < MOVE_EPSILON * MOVE_EPSILON && now % 10 != 0) {
+		if (!full && state.lastEye != null && state.lastEye.distanceToSqr(eye) < MOVE_EPSILON * MOVE_EPSILON && now % STILL_INTERVAL != 0) {
 			return;
 		}
 		state.lastEye = eye;
 
-		Map<BlockPos, BlockState> wanted = new HashMap<>();
+		Long2ObjectMap<Shown> shown = new Long2ObjectOpenHashMap<>(state.shown.size() + 64);
 		int drawn = 0;
 		for (PortalLink link : state.links) {
 			if (drawn == MAX_PORTALS) {
@@ -112,48 +123,54 @@ final class FallbackWindows {
 			if (dest == null) {
 				continue;
 			}
-			collect(level, dest, link, geometry, eye, wanted);
+			collect(level, dest, link, geometry, eye, shown);
 			drawn++;
 		}
 
 		// Changes grouped by section: one packet per section, as vanilla sends block changes.
-		Map<Long, Map<BlockPos, BlockState>> changes = new HashMap<>();
-		for (BlockPos pos : state.shown.keySet()) {
-			if (!wanted.containsKey(pos)) {
-				// No longer in view: back to the real block.
-				changes.computeIfAbsent(SectionPos.asLong(pos), k -> new HashMap<>()).put(pos, level.getBlockState(pos));
+		Long2ObjectMap<Long2ObjectMap<BlockState>> changes = new Long2ObjectOpenHashMap<>();
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		Long2ObjectMap<Shown> previous = state.shown;
+		for (Long2ObjectMap.Entry<Shown> entry : shown.long2ObjectEntrySet()) {
+			// Sent again when it changed, or when the real block did (its update replaced ours).
+			if (!entry.getValue().equals(previous.remove(entry.getLongKey())) || full) {
+				change(changes, pos.set(entry.getLongKey()), entry.getValue().fake());
 			}
 		}
-		for (Map.Entry<BlockPos, BlockState> entry : wanted.entrySet()) {
-			if (full || !entry.getValue().equals(state.shown.get(entry.getKey()))) {
-				changes.computeIfAbsent(SectionPos.asLong(entry.getKey()), k -> new HashMap<>()).put(entry.getKey(), entry.getValue());
-			}
+		for (long key : previous.keySet()) {
+			// No longer in view: back to the real block.
+			change(changes, pos.set(key), level.getBlockState(pos));
 		}
 		if (PERF && now % 100 == 0) {
 			org.slf4j.LoggerFactory.getLogger("netherview").info("[perf] fallback {}: {} fake blocks, {} changed in {} sections",
-					player.getScoreboardName(), wanted.size(), changes.values().stream().mapToInt(Map::size).sum(), changes.size());
+					player.getScoreboardName(), shown.size(), changes.values().stream().mapToInt(Map::size).sum(), changes.size());
 		}
-		state.shown = wanted;
+		state.shown = shown;
 		if (full) {
 			state.lastFull = now;
 		}
 		List<Packet<? super ClientGamePacketListener>> packets = new ArrayList<>();
-		for (Map.Entry<Long, Map<BlockPos, BlockState>> section : changes.entrySet()) {
-			packets.add(sectionUpdate(SectionPos.of(section.getKey()), section.getValue()));
+		for (Long2ObjectMap.Entry<Long2ObjectMap<BlockState>> section : changes.long2ObjectEntrySet()) {
+			packets.add(sectionUpdate(SectionPos.of(section.getLongKey()), section.getValue()));
 		}
 		for (int start = 0; start < packets.size(); start += MAX_BUNDLE) {
 			player.connection.send(new ClientboundBundlePacket(packets.subList(start, Math.min(packets.size(), start + MAX_BUNDLE))));
 		}
 	}
 
+	private static void change(Long2ObjectMap<Long2ObjectMap<BlockState>> changes, BlockPos pos, BlockState state) {
+		changes.computeIfAbsent(SectionPos.asLong(pos), k -> new Long2ObjectOpenHashMap<>()).put(pos.asLong(), state);
+	}
+
 	/** A section's block changes in one packet (built through its codec: its constructor reads a real section). */
-	private static ClientboundSectionBlocksUpdatePacket sectionUpdate(SectionPos section, Map<BlockPos, BlockState> blocks) {
+	private static ClientboundSectionBlocksUpdatePacket sectionUpdate(SectionPos section, Long2ObjectMap<BlockState> blocks) {
 		FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		try {
 			SectionPos.STREAM_CODEC.encode(buf, section);
 			buf.writeVarInt(blocks.size());
-			for (Map.Entry<BlockPos, BlockState> entry : blocks.entrySet()) {
-				buf.writeVarLong((long) Block.getId(entry.getValue()) << 12 | SectionPos.sectionRelativePos(entry.getKey()));
+			for (Long2ObjectMap.Entry<BlockState> entry : blocks.long2ObjectEntrySet()) {
+				buf.writeVarLong((long) Block.getId(entry.getValue()) << 12 | SectionPos.sectionRelativePos(pos.set(entry.getLongKey())));
 			}
 			return ClientboundSectionBlocksUpdatePacket.STREAM_CODEC.decode(buf);
 		} finally {
@@ -161,8 +178,11 @@ final class FallbackWindows {
 		}
 	}
 
-	/** The fake blocks for one portal, as seen from {@code eye}. */
-	private static void collect(ServerLevel level, ServerLevel dest, PortalLink link, PortalGeometry geometry, Vec3 eye, Map<BlockPos, BlockState> out) {
+	/**
+	 * The fake blocks for one portal, as seen from {@code eye}, with the real blocks they cover.
+	 * Places where the copy matches the real block are left out: the client shows them already.
+	 */
+	private static void collect(ServerLevel level, ServerLevel dest, PortalLink link, PortalGeometry geometry, Vec3 eye, Long2ObjectMap<Shown> out) {
 		PortalEnd source = link.source();
 		Vec3 center = geometry.sourceCenter();
 		Vec3 normal = geometry.sourceNormal();
@@ -180,57 +200,92 @@ final class FallbackWindows {
 
 		// The portal's own fill shows as nothing.
 		for (BlockPos pos : source.blocks()) {
-			out.put(pos.immutable(), Blocks.AIR.defaultBlockState());
+			BlockState real = level.getBlockState(pos);
+			if (!real.isAir()) {
+				out.put(pos.asLong(), new Shown(Blocks.AIR.defaultBlockState(), real));
+			}
 		}
 
-		// Bounding box of the view pyramid: the opening's corners and where the rays through them reach the depth limit.
 		int depthLimit = PortalViewServer.config().fallbackDepth();
-		AABB bounds = null;
-		double stretch = (eyeDistance + depthLimit) / eyeDistance;
-		for (Vec3 corner : geometry.sourceCorners(eye, 0.0)) {
-			Vec3 deep = eye.add(corner.subtract(eye).scale(stretch));
-			AABB both = new AABB(corner, deep);
-			bounds = bounds == null ? both : bounds.minmax(both);
-		}
 		Rotation rotation = rotation(geometry);
 		ensureLoaded(dest, geometry.destCenter(), depthLimit);
+		Map<BlockPos, String> destPortals = CustomPortals.blocksIn(dest);
 		BlockPos.MutableBlockPos destPos = new BlockPos.MutableBlockPos();
-		for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(bounds.minX, bounds.minY, bounds.minZ), BlockPos.containing(bounds.maxX, bounds.maxY, bounds.maxZ))) {
-			Vec3 q = Vec3.atCenterOf(pos);
-			double depth = q.subtract(center).dot(far);
-			if (depth <= 0.0 || depth > depthLimit) {
+		Chunks realChunks = new Chunks(level);
+		Chunks destChunks = new Chunks(dest);
+
+		// Walked layer by layer away from the opening. The portal is axis-aligned, so each layer of
+		// block centres is a plane, and the part of it seen through the opening is a rectangle that
+		// grows with depth: only the blocks inside it are visited. Positions are measured along
+		// far / right / up from the origin; block centres sit on half-integers along each.
+		double eyeF = eye.dot(far), eyeR = eye.dot(right), eyeU = eye.dot(up);
+		double centerF = center.dot(far), centerR = center.dot(right), centerU = center.dot(up);
+		for (double f = Math.floor(centerF - 0.5) + 1.5; f - centerF <= depthLimit; f++) {
+			double depth = f - centerF;
+			if (depth <= 0.0) {
 				continue;
 			}
-			// Where the line from the eye to this block's centre crosses the portal plane.
-			Vec3 hit = eye.add(q.subtract(eye).scale(eyeDistance / (eyeDistance + depth)));
-			Vec3 local = hit.subtract(center);
-			if (Math.abs(local.dot(right)) > halfWidth || Math.abs(local.dot(up)) > halfHeight) {
-				continue;
+			// Seen through the opening: |eye + (q - eye) * t - center| ≤ half size, along right and up.
+			double scale = (eyeDistance + depth) / eyeDistance;
+			double minR = eyeR + (centerR - eyeR - halfWidth) * scale, maxR = eyeR + (centerR - eyeR + halfWidth) * scale;
+			double minU = eyeU + (centerU - eyeU - halfHeight) * scale, maxU = eyeU + (centerU - eyeU + halfHeight) * scale;
+			for (double r = Math.ceil(minR - 0.5) + 0.5; r <= maxR; r++) {
+				for (double u = Math.ceil(minU - 0.5) + 0.5; u <= maxU; u++) {
+					double qx = far.x * f + right.x * r + up.x * u;
+					double qy = far.y * f + right.y * r + up.y * u;
+					double qz = far.z * f + right.z * r + up.z * u;
+					int x = Mth.floor(qx), y = Mth.floor(qy), z = Mth.floor(qz);
+					BlockState real = realChunks.get(x, y, z);
+					if (real == null) {
+						continue; // the client hasn't this chunk either
+					}
+					Vec3 mapped = geometry.toDest(new Vec3(qx, qy, qz));
+					destPos.set(Math.floor(mapped.x), Math.floor(mapped.y), Math.floor(mapped.z));
+					BlockState state = destState(destChunks, destPos, destPortals);
+					if (state == null) {
+						continue;
+					}
+					state = state.rotate(rotation);
+					if (state != real) {
+						out.put(BlockPos.asLong(x, y, z), new Shown(state, real));
+					}
+				}
 			}
-			if (out.containsKey(pos)) {
-				continue;
-			}
-			Vec3 mapped = geometry.toDest(q);
-			destPos.set(Math.floor(mapped.x), Math.floor(mapped.y), Math.floor(mapped.z));
-			BlockState state = destState(dest, destPos);
-			if (state == null) {
-				continue;
-			}
-			out.put(pos.immutable(), state.rotate(rotation));
 		}
 	}
 
 	/** A destination block as the copy shows it: portal fills (the far portal's own) as air; null if not loaded. */
-	private static BlockState destState(ServerLevel dest, BlockPos pos) {
-		LevelChunk chunk = dest.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
-		if (chunk == null) {
+	private static BlockState destState(Chunks dest, BlockPos pos, Map<BlockPos, String> destPortals) {
+		BlockState state = dest.get(pos.getX(), pos.getY(), pos.getZ());
+		if (state == null) {
 			return null;
 		}
-		BlockState state = chunk.getBlockState(pos);
-		if (state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL) || state.is(Blocks.END_GATEWAY) || CustomPortals.at(dest, pos) != null) {
+		if (state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL) || state.is(Blocks.END_GATEWAY) || destPortals.containsKey(pos)) {
 			return Blocks.AIR.defaultBlockState();
 		}
 		return state;
+	}
+
+	/** Block lookups in loaded chunks, remembering the last chunk (neighbouring lookups mostly share it). */
+	private static final class Chunks {
+		private final ServerLevel level;
+		private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		private long key = Long.MIN_VALUE;
+		private LevelChunk chunk;
+
+		Chunks(ServerLevel level) {
+			this.level = level;
+		}
+
+		/** The block, or null where the chunk isn't loaded. */
+		BlockState get(int x, int y, int z) {
+			long chunkKey = ChunkPos.pack(x >> 4, z >> 4);
+			if (chunkKey != this.key) {
+				this.key = chunkKey;
+				this.chunk = this.level.getChunkSource().getChunkNow(x >> 4, z >> 4);
+			}
+			return this.chunk == null ? null : this.chunk.getBlockState(this.pos.set(x, y, z));
+		}
 	}
 
 	/** Loads (without ticking) the chunks the copy reads from. */

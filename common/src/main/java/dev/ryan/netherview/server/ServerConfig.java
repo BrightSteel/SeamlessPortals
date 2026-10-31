@@ -28,7 +28,7 @@ package dev.ryan.netherview.server;
  */
 public record ServerConfig(int scanRadius, int streamedDestinations, int viewRadiusChunks, int chunksPerScan, double entityRadius, int maxPortalSize,
 		boolean tickDestination, boolean seamlessTravel, boolean fallbackViews, int fallbackDepth) {
-	public static final ServerConfig DEFAULTS = new ServerConfig(24, 2, 4, 8, 24.0, 21, false, true, true, 16);
+	public static final ServerConfig DEFAULTS = new ServerConfig(24, 2, 4, 8, 24.0, 21, false, true, true, 24);
 
 	/** Clamps values to sane ranges so a bad config can't make the server do unbounded work. */
 	public ServerConfig {

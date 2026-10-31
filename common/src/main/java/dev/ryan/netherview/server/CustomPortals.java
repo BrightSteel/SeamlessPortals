@@ -127,6 +127,11 @@ public final class CustomPortals {
 		return name == null ? null : PORTALS.get(name);
 	}
 
+	/** Every custom portal block in the level, and its portal's name. */
+	public static Map<BlockPos, String> blocksIn(Level level) {
+		return blocks.getOrDefault(level.dimension().identifier().toString(), Map.of());
+	}
+
 	/** Whether the entity's box overlaps a custom portal block. */
 	public static boolean touches(Entity entity) {
 		Map<BlockPos, String> world = blocks.get(entity.level().dimension().identifier().toString());
