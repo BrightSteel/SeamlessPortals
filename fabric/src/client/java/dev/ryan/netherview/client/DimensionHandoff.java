@@ -50,6 +50,8 @@ public final class DimensionHandoff {
 	 * once the bridge ends, and the hand-off already filled the level, so it is skipped briefly.
 	 */
 	private static final long FADE_SUPPRESS_MS = 2000L;
+	/** Rounds of the light queue that drain a full hand-off fill (each takes at least a tenth, or 10). */
+	private static final int LIGHT_DRAIN_ROUNDS = 64;
 
 	/** Set by the server's travel announcement, consumed by the respawn that follows it. */
 	private static PortalLink travel;
@@ -169,7 +171,7 @@ public final class DimensionHandoff {
 		if (chunks.isEmpty() || level == null) {
 			return;
 		}
-		RemoteDimensions.adoptAsBridge(level.dimension(), pendingView);
+		RemoteDimensions.adoptAsBridge(level.dimension(), pendingView, true);
 		pendingView = null;
 		level.getChunkSource().updateViewCenter(center.x(), center.z());
 		filling = true;
@@ -177,8 +179,15 @@ public final class DimensionHandoff {
 			for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
 				listener.handleLevelChunkWithLight(chunk);
 			}
+			// Vanilla lights queued chunks a tenth of the queue a tick, and an entity in an unlit
+			// chunk is drawn black: the mobs just seen through the portal would flash dark. These
+			// chunks come with their light, so apply it all now.
+			for (int i = 0; i < LIGHT_DRAIN_ROUNDS; i++) {
+				level.pollLightUpdates();
+			}
+			level.getChunkSource().getLightEngine().runLightUpdates();
 			// Its entities too, so mobs seen through the portal don't vanish until the server
-			// sends them; the server's copies replace these (same ids) when they arrive.
+			// sends them; the server's copies (same ids) update these when they arrive.
 			for (Packet<ClientGamePacketListener> packet : pendingEntities) {
 				try {
 					packet.handle(listener);
@@ -287,7 +296,7 @@ public final class DimensionHandoff {
 					listener.handleLevelChunkWithLight(chunk);
 				}
 			}
-			RemoteDimensions.adoptAsBridge(level.dimension(), remote);
+			RemoteDimensions.adoptAsBridge(level.dimension(), remote, false);
 			fadeSuppressedUntil = Util.getMillis() + FADE_SUPPRESS_MS;
 		}
 		return true;
@@ -343,6 +352,16 @@ public final class DimensionHandoff {
 	/** For a moment after arriving, new chunk sections appear at once instead of fading in. */
 	public static boolean suppressChunkFade() {
 		return Util.getMillis() < fadeSuppressedUntil;
+	}
+
+	/**
+	 * Vanilla hides an entity until its section is meshed, and right after a hand-off almost
+	 * nothing is: the entities the player just saw through the portal would vanish and pop
+	 * back one section at a time. Until the new level catches up they're drawn anyway; the
+	 * bridge's terrain, depth-merged in front, still hides those behind walls.
+	 */
+	public static boolean showUnmeshedEntities() {
+		return suppressChunkFade() || RemoteDimensions.bridge() != null;
 	}
 
 	/**

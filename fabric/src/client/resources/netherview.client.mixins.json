@@ -24,6 +24,7 @@
 		"RenderSectionRegionAccessor",
 		"SectionCompilerMixin",
 		"SectionNeighborsMixin",
+		"EntitySectionCullMixin",
 		"SectionOcclusionGraphMixin",
 		"TheEndGatewayRendererMixin"
 	],

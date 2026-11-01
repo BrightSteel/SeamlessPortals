@@ -23,6 +23,7 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.GameProtocols;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
@@ -58,6 +59,10 @@ public final class RemoteDimensions {
 	/** Every view, bridge included, as last published: mixins ask from worker threads too (26.1's culling graph). */
 	private static volatile List<RemoteDimension> published = List.of();
 	private static int bridgeTicks;
+	/** The bridge's entities were copied into the new level: drop its own after {@link #BRIDGE_ENTITY_TICKS}. */
+	private static boolean dropBridgeEntities;
+	/** The new level's copies only show from the frame after the hand-off, so the bridge's cover it until then. */
+	private static final int BRIDGE_ENTITY_TICKS = 2;
 	private static final int BRIDGE_MIN_TICKS = 2;
 	/** Longest the bridge is kept (3 s), in case the main renderer never quite matches it. */
 	private static final int BRIDGE_MAX_TICKS = 60;
@@ -204,8 +209,11 @@ public final class RemoteDimensions {
 		return Math.max(Math.abs(ClientVersioned.chunkX(chunk) - center.x()), Math.abs(ClientVersioned.chunkZ(chunk) - center.z()));
 	}
 
-	/** Keep {@code view} (one of {@code dimension}'s) alive as the bridge while the main renderer meshes the new level. */
-	static void adoptAsBridge(ResourceKey<Level> dimension, RemoteDimension view) {
+	/**
+	 * Keep {@code view} (one of {@code dimension}'s) alive as the bridge while the main renderer
+	 * meshes the new level. {@code entitiesCopied}: its entities were added to the new level.
+	 */
+	static void adoptAsBridge(ResourceKey<Level> dimension, RemoteDimension view, boolean entitiesCopied) {
 		List<RemoteDimension> views = VIEWS.remove(dimension);
 		if (views == null || !views.remove(view)) {
 			if (views != null) {
@@ -216,6 +224,7 @@ public final class RemoteDimensions {
 		closeBridge();
 		bridge = view;
 		bridgeTicks = 0;
+		dropBridgeEntities = entitiesCopied;
 		PortalViewRenderer.forgetRemotes();
 		views.forEach(RemoteDimension::close);
 		publishRemoteLevels();
@@ -336,6 +345,16 @@ public final class RemoteDimensions {
 		if (bridge != null) {
 			bridge.tick(minecraft.level);
 			bridgeTicks++;
+			if (dropBridgeEntities && bridgeTicks >= BRIDGE_ENTITY_TICKS) {
+				// The new level has them now and the server keeps those updated; this copy would
+				// stop moving and show through as frozen doubles.
+				dropBridgeEntities = false;
+				List<Entity> stale = new ArrayList<>();
+				bridge.level.entitiesForRendering().forEach(stale::add);
+				for (Entity entity : stale) {
+					bridge.level.removeEntity(entity.getId(), Entity.RemovalReason.DISCARDED);
+				}
+			}
 			// The bridge doubles the frame's cost, so it ends as soon as the main renderer draws
 			// (nearly) as much as the bridge does: fade-in is off right after a hand-off, so
 			// nothing is half-drawn. The compile queue alone says nothing early on: it's empty
