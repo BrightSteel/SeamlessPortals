@@ -7,6 +7,7 @@
 		"CameraAccessor",
 		"ChunkFadeMixin",
 		"ClientPacketListenerAccessor",
+		"ChunkPacketDataAccessor",
 		"ClientPacketListenerMixin",
 		"CloudRendererInvoker",
 		"FramerateLimitTrackerMixin",

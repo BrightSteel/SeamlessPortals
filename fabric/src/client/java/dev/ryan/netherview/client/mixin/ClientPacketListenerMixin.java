@@ -71,9 +71,12 @@ public abstract class ClientPacketListenerMixin {
 
 	@Inject(
 			method = "handleLevelChunkWithLight",
-			at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V", shift = At.Shift.AFTER))
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V", shift = At.Shift.AFTER),
+			cancellable = true)
 	private void netherview$noteServerChunk(ClientboundLevelChunkWithLightPacket packet, CallbackInfo ci) {
-		DimensionHandoff.onServerChunk(packet);
+		if (DimensionHandoff.onServerChunk(packet)) {
+			ci.cancel();
+		}
 	}
 
 	@Inject(
@@ -81,7 +84,7 @@ public abstract class ClientPacketListenerMixin {
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V", shift = At.Shift.AFTER),
 			cancellable = true)
 	private void netherview$noteServerEntity(ClientboundAddEntityPacket packet, CallbackInfo ci) {
-		if (DimensionHandoff.onServerEntity(packet)) {
+		if (DimensionHandoff.onServerEntity(packet, ((ClientPacketListenerAccessor) this).netherview$getLevel())) {
 			ci.cancel();
 		}
 	}

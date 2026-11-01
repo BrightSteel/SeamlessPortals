@@ -22,6 +22,7 @@ import dev.ryan.netherview.client.mixin.CloudRendererInvoker;
 import dev.ryan.netherview.client.mixin.LevelRendererAccessor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import com.mojang.blaze3d.resource.CrossFrameResourcePool;
 import net.minecraft.client.renderer.LevelRenderer;
@@ -54,6 +55,7 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.BiPredicate;
 
 /**
  * A dimension the player is not in, kept alive client-side so it can be drawn through
@@ -132,7 +134,12 @@ public final class RemoteDimension implements AutoCloseable {
 
 	/** Every loaded chunk, re-encoded as the packet that would load it, blocks and light included. */
 	List<ClientboundLevelChunkWithLightPacket> snapshotChunks() {
-		return this.center == null ? new ArrayList<>() : snapshotChunks(this.level, this.center, CHUNK_RADIUS + 3);
+		return snapshotChunks(CHUNK_RADIUS + 3);
+	}
+
+	/** Its loaded chunks within {@code radius} of its center, as the packets that would load them. */
+	List<ClientboundLevelChunkWithLightPacket> snapshotChunks(int radius) {
+		return this.center == null ? new ArrayList<>() : snapshotChunks(this.level, this.center, radius);
 	}
 
 	/**
@@ -141,9 +148,17 @@ public final class RemoteDimension implements AutoCloseable {
 	 * the client knows them (a player can't be added otherwise).
 	 */
 	List<Packet<ClientGamePacketListener>> snapshotEntities(ClientPacketListener connection) {
+		return snapshotEntities(this.level, connection, null, 0);
+	}
+
+	/** {@link #snapshotEntities(ClientPacketListener)} for any level, only within {@code radius} chunks of {@code center} if given; never the local player. */
+	static List<Packet<ClientGamePacketListener>> snapshotEntities(ClientLevel level, ClientPacketListener connection, ChunkPos center, int radius) {
 		List<Packet<ClientGamePacketListener>> packets = new ArrayList<>();
-		for (Entity entity : this.level.entitiesForRendering()) {
-			if (entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null) {
+		for (Entity entity : level.entitiesForRendering()) {
+			if (entity instanceof LocalPlayer || entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null) {
+				continue;
+			}
+			if (center != null && Math.max(Math.abs(entity.chunkPosition().x() - center.x()), Math.abs(entity.chunkPosition().z() - center.z())) > radius) {
 				continue;
 			}
 			int data = entity instanceof FallingBlockEntity falling ? Block.getId(falling.getBlockState())
@@ -172,11 +187,16 @@ public final class RemoteDimension implements AutoCloseable {
 
 	/** Loaded chunks of {@code level} within {@code radius} of {@code center}, as the packets that would load them. */
 	static List<ClientboundLevelChunkWithLightPacket> snapshotChunks(ClientLevel level, ChunkPos center, int radius) {
+		return snapshotChunks(level, center, radius, (x, z) -> false);
+	}
+
+	/** {@link #snapshotChunks(ClientLevel, ChunkPos, int)}, leaving out the chunks {@code skip} names. */
+	static List<ClientboundLevelChunkWithLightPacket> snapshotChunks(ClientLevel level, ChunkPos center, int radius, BiPredicate<Integer, Integer> skip) {
 		List<ClientboundLevelChunkWithLightPacket> chunks = new ArrayList<>();
 		for (int x = center.x() - radius; x <= center.x() + radius; x++) {
 			for (int z = center.z() - radius; z <= center.z() + radius; z++) {
 				LevelChunk chunk = level.getChunkSource().getChunk(x, z, false);
-				if (chunk != null) {
+				if (chunk != null && !skip.test(x, z)) {
 					chunks.add(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null));
 				}
 			}

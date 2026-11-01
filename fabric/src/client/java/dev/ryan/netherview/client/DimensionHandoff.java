@@ -6,10 +6,13 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.world.entity.Entity;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.PortalGeometry;
+import dev.ryan.netherview.client.mixin.ChunkPacketDataAccessor;
 import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
 import dev.ryan.netherview.client.mixin.LivingEntityAccessor;
 import dev.ryan.netherview.client.mixin.PlayerAccessor;
@@ -27,9 +30,14 @@ import net.minecraft.util.Util;
 import net.minecraft.world.attribute.EnvironmentAttributeProbe;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Makes walking through a portal seamless. The dimension on the other side is already
@@ -60,8 +68,11 @@ public final class DimensionHandoff {
 	private static RemoteDimension pendingView;
 	/** The bridge view's entities, as spawn packets, to add to the new level with its terrain. */
 	private static List<Packet<ClientGamePacketListener>> pendingEntities = List.of();
-	/** Entities a hand-off added that the server hasn't sent itself yet, and when to drop them. */
-	private static final IntSet seededEntities = new IntOpenHashSet();
+	/**
+	 * Per level (the new one, and the way-back view's): entities a hand-off added that the server
+	 * hasn't sent itself yet, and when to drop them.
+	 */
+	private static final Map<ClientLevel, IntSet> seededEntities = new HashMap<>();
 	private static long seededEntitiesUntil;
 	/** How long seeded entities wait for the server's own copy before they're taken away (out of its range). */
 	private static final long SEEDED_ENTITY_MS = 5000L;
@@ -72,21 +83,34 @@ public final class DimensionHandoff {
 	/** Chunks the server itself has sent in the current level (not the ones a hand-off filled in). */
 	private static final LongSet serverChunks = new LongOpenHashSet();
 	private static boolean filling;
+	/** A hand-off's chunks not filled in yet, nearest first, and the view to copy them from; see {@link #tick}. */
+	private static final List<ChunkPos> deferredFill = new ArrayList<>();
+	private static RemoteDimension fillSource;
+	/** The block data of each chunk a hand-off filled in, until the server resends that chunk. */
+	private static final Long2ObjectMap<byte[]> filledData = new Long2ObjectOpenHashMap<>();
+	/** Chunks this near the arrival (in chunks) are filled in at once, the rest {@link #FILL_PER_TICK} a tick. */
+	private static final int FILL_NOW_RADIUS = 3;
+	private static final int FILL_PER_TICK = 8;
 
 	/** Where the player really is (client-side) when the server moved them, carried through the portal. */
 	private static Vec3 arrivalPosition;
 	private static Vec3 arrivalVelocity;
 	private static float arrivalYRot;
+	private static PortalGeometry arrivalGeometry;
 	private static float arrivalXRot;
 
 	/** The portal just used, reversed, and the dimension being left with its chunks around that portal. */
 	private static PortalLink wayBack;
 	private static ResourceKey<Level> wayBackDimension;
 	private static List<ClientboundLevelChunkWithLightPacket> wayBackChunks = List.of();
+	private static List<Packet<ClientGamePacketListener>> wayBackEntities = List.of();
 
 	/** Set between a hand-off and the server's placement packet that follows it. */
 	private static boolean holdThroughPlacement;
 	private static Vec3 heldPosition;
+	private static Vec3 heldOldPosition;
+	private static float heldYRotO;
+	private static float heldXRotO;
 	private static Vec3 heldVelocity;
 	private static float heldYRot;
 	private static float heldXRot;
@@ -113,10 +137,14 @@ public final class DimensionHandoff {
 		pendingView = null;
 		pendingEntities = List.of();
 		seededEntities.clear();
+		deferredFill.clear();
+		fillSource = null;
+		filledData.clear();
 		previousPlayer = null;
 		arrivalPosition = null;
 		wayBack = null;
 		wayBackChunks = List.of();
+		wayBackEntities = List.of();
 		// Only a walk through a linked portal, announced by the server, is handed off: a /tp,
 		// death or plugin teleport lands somewhere this view may have no terrain for, and its
 		// placement must be honoured.
@@ -130,7 +158,9 @@ public final class DimensionHandoff {
 			return;
 		}
 		RemoteDimensions.Link used = new RemoteDimensions.Link(announced, PortalGeometry.of(announced), newDimension);
-		pendingChunks = remote.snapshotChunks();
+		// Only the chunks around the arrival now (encoding them all would stall this frame);
+		// the rest are copied from the same view, the bridge by then, a few a tick (see tick).
+		pendingChunks = remote.snapshotChunks(FILL_NOW_RADIUS);
 		pendingCenter = remote.center();
 		pendingView = remote;
 		pendingEntities = minecraft.getConnection() == null ? List.of() : remote.snapshotEntities(minecraft.getConnection());
@@ -138,6 +168,7 @@ public final class DimensionHandoff {
 		// The server placed the player from where it last saw them, and the client has kept
 		// moving since; carry the client's own position through the portal instead.
 		PortalGeometry geometry = used.geometry();
+		arrivalGeometry = geometry;
 		arrivalPosition = geometry.toDest(minecraft.player.position());
 		arrivalVelocity = geometry.rotate(minecraft.player.getDeltaMovement());
 		float[] rotation = geometry.toDestRotation(minecraft.player.getYRot(), minecraft.player.getXRot());
@@ -151,8 +182,15 @@ public final class DimensionHandoff {
 		wayBack = link.reversed(minecraft.level.dimension().identifier().toString(),
 				minecraft.level.dimensionTypeRegistration().unwrapKey().map(key -> key.identifier().toString()).orElse("minecraft:overworld"));
 		wayBackDimension = minecraft.level.dimension();
-		wayBackChunks = RemoteDimension.snapshotChunks(minecraft.level,
-				ChunkPos.containing(BlockPos.containing(geometry.sourceCenter())), RemoteDimension.chunkRadius());
+		ChunkPos backCenter = ChunkPos.containing(BlockPos.containing(geometry.sourceCenter()));
+		// Not the chunks a view prepared while the player came up to the portal already has.
+		ResourceKey<Level> backDimension = minecraft.level.dimension();
+		wayBackChunks = RemoteDimension.snapshotChunks(minecraft.level, backCenter, RemoteDimension.chunkRadius(),
+				(x, z) -> RemoteDimensions.preparedHas(backDimension, backCenter, x, z));
+		// Its entities too, or the mobs just left behind vanish from the window back until the
+		// server streams them to that view.
+		wayBackEntities = minecraft.getConnection() == null ? List.of()
+				: RemoteDimension.snapshotEntities(minecraft.level, minecraft.getConnection(), backCenter, RemoteDimension.chunkRadius());
 	}
 
 	/** While a hand-off is pending, the new level already has terrain to show. */
@@ -172,12 +210,26 @@ public final class DimensionHandoff {
 			return;
 		}
 		RemoteDimensions.adoptAsBridge(level.dimension(), pendingView, true);
+		fillSource = pendingView;
 		pendingView = null;
 		level.getChunkSource().updateViewCenter(center.x(), center.z());
 		filling = true;
 		try {
+			// The chunks around the player now; the rest a few a tick (see tick), unless the
+			// server's own come first: filling them all at once would stall this frame.
 			for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
-				listener.handleLevelChunkWithLight(chunk);
+				fill(listener, chunk);
+			}
+			deferredFill.clear();
+			int radius = RemoteDimension.chunkRadius() + 3;
+			for (int ring = FILL_NOW_RADIUS + 1; ring <= radius; ring++) {
+				for (int x = center.x() - ring; x <= center.x() + ring; x++) {
+					for (int z = center.z() - ring; z <= center.z() + ring; z++) {
+						if (Math.max(Math.abs(x - center.x()), Math.abs(z - center.z())) == ring) {
+							deferredFill.add(new ChunkPos(x, z));
+						}
+					}
+				}
 			}
 			// Vanilla lights queued chunks a tenth of the queue a tick, and an entity in an unlit
 			// chunk is drawn black: the mobs just seen through the portal would flash dark. These
@@ -192,7 +244,7 @@ public final class DimensionHandoff {
 				try {
 					packet.handle(listener);
 					if (packet instanceof ClientboundAddEntityPacket add) {
-						seededEntities.add(add.getId());
+						seededEntities.computeIfAbsent(level, key -> new IntOpenHashSet()).add(add.getId());
 					}
 				} catch (RuntimeException ignored) {
 					// an entity that can't be added here simply appears when the server sends it
@@ -205,14 +257,32 @@ public final class DimensionHandoff {
 		seededEntitiesUntil = Util.getMillis() + SEEDED_ENTITY_MS;
 		filledLevel = true;
 		if (wayBack != null) {
-			RemoteDimensions.installArrival(wayBack, wayBackDimension, wayBackChunks);
+			filling = true;
+			try {
+				RemoteDimension back = RemoteDimensions.installArrival(wayBack, wayBackDimension, wayBackChunks, wayBackEntities);
+				for (Packet<ClientGamePacketListener> packet : wayBackEntities) {
+					if (packet instanceof ClientboundAddEntityPacket add && back.level.getEntity(add.getId()) != null) {
+						seededEntities.computeIfAbsent(back.level, key -> new IntOpenHashSet()).add(add.getId());
+					}
+				}
+			} finally {
+				filling = false;
+			}
 		}
 		wayBack = null;
 		wayBackChunks = List.of();
+		wayBackEntities = List.of();
 
 		// The new player object starts at the origin and the server's placement may land a
 		// frame later; with no loading screen to hide that, place it now.
 		placeAtArrival();
+		if (arrivalGeometry != null && arrivalVelocity != null) {
+			Vec3 normal = arrivalGeometry.destNormal();
+			double along = arrivalVelocity.dot(normal);
+			if (Math.abs(along) > 1.0E-4) {
+				PortalViewRenderer.arrivedThrough(arrivalGeometry.destCenter(), normal.scale(Math.signum(along)));
+			}
+		}
 		carryOver(previousPlayer, Minecraft.getInstance().player);
 		previousPlayer = null;
 		// The main camera's environment probe (fog, sky and light colours) still holds the old
@@ -225,6 +295,7 @@ public final class DimensionHandoff {
 		}
 		holdThroughPlacement = arrivalPosition != null;
 		arrivalPosition = null;
+		arrivalGeometry = null;
 		// Let the player keep moving right away: vanilla would hold them until the server's
 		// chunks arrive. This sends the same "player loaded" packet vanilla sends after that wait.
 		((ClientPacketListenerAccessor) listener).netherview$notifyPlayerLoaded();
@@ -243,9 +314,12 @@ public final class DimensionHandoff {
 		LocalPlayer player = Minecraft.getInstance().player;
 		if (holdThroughPlacement && player != null) {
 			heldPosition = player.position();
+			heldOldPosition = new Vec3(player.xo, player.yo, player.zo);
 			heldVelocity = player.getDeltaMovement();
 			heldYRot = player.getYRot();
 			heldXRot = player.getXRot();
+			heldYRotO = player.yRotO;
+			heldXRotO = player.xRotO;
 		}
 	}
 
@@ -259,6 +333,9 @@ public final class DimensionHandoff {
 		if (holdThroughPlacement && heldPosition != null && player != null) {
 			player.snapTo(heldPosition.x, heldPosition.y, heldPosition.z, heldYRot, heldXRot);
 			player.setDeltaMovement(heldVelocity);
+			// Snapping also resets the previous tick's position, which the camera interpolates
+			// from: it would stand still until the next tick.
+			setPrevious(player, heldOldPosition, heldYRotO, heldXRotO);
 		}
 		holdThroughPlacement = false;
 		heldPosition = null;
@@ -307,12 +384,12 @@ public final class DimensionHandoff {
 	 * the server's position instead: replacing it would restart its animation and interpolation,
 	 * a visible flicker. Returns whether the packet is handled.
 	 */
-	public static boolean onServerEntity(ClientboundAddEntityPacket packet) {
-		if (filling || !seededEntities.remove(packet.getId())) {
+	public static boolean onServerEntity(ClientboundAddEntityPacket packet, ClientLevel level) {
+		IntSet seeded = seededEntities.get(level);
+		if (filling || seeded == null || !seeded.remove(packet.getId())) {
 			return false;
 		}
-		ClientLevel level = Minecraft.getInstance().level;
-		Entity entity = level == null ? null : level.getEntity(packet.getId());
+		Entity entity = level.getEntity(packet.getId());
 		if (entity == null || entity.getType() != packet.getType() || !entity.getUUID().equals(packet.getUUID())) {
 			return false;
 		}
@@ -322,23 +399,58 @@ public final class DimensionHandoff {
 		return true;
 	}
 
+	/** Fill one chunk of a hand-off into the player's level, remembering its data for {@link #onServerChunk}. */
+	private static void fill(ClientPacketListener listener, ClientboundLevelChunkWithLightPacket chunk) {
+		listener.handleLevelChunkWithLight(chunk);
+		filledData.put(ChunkPos.pack(ClientVersioned.chunkX(chunk), ClientVersioned.chunkZ(chunk)),
+				((ChunkPacketDataAccessor) ClientVersioned.chunkData(chunk)).netherview$getBuffer());
+	}
+
 	/** Every client tick: seeded entities the server never sent (outside its range) are removed. */
 	public static void tick(Minecraft minecraft) {
-		if (!seededEntities.isEmpty() && Util.getMillis() > seededEntitiesUntil) {
-			if (minecraft.level != null) {
-				for (int id : seededEntities) {
-					minecraft.level.removeEntity(id, Entity.RemovalReason.DISCARDED);
+		ClientPacketListener connection = minecraft.getConnection();
+		if (!deferredFill.isEmpty() && (connection == null || !filledLevel || fillSource == null || fillSource.isClosed()
+				|| minecraft.level == null || minecraft.level.dimension() != fillSource.key)) {
+			deferredFill.clear();
+			fillSource = null;
+		}
+		if (!deferredFill.isEmpty()) {
+			filling = true;
+			try {
+				for (int filled = 0; filled < FILL_PER_TICK && !deferredFill.isEmpty(); ) {
+					ChunkPos pos = deferredFill.removeFirst();
+					LevelChunk chunk = fillSource.level.getChunkSource().getChunk(pos.x(), pos.z(), false);
+					if (chunk != null && !serverChunks.contains(pos.pack())) {
+						fill(connection, new ClientboundLevelChunkWithLightPacket(chunk, fillSource.level.getLightEngine(), null, null));
+						filled++;
+					}
 				}
+			} finally {
+				filling = false;
 			}
+		}
+		if (!seededEntities.isEmpty() && Util.getMillis() > seededEntitiesUntil) {
+			seededEntities.forEach((level, ids) -> ids.forEach(id -> level.removeEntity(id, Entity.RemovalReason.DISCARDED)));
 			seededEntities.clear();
 		}
 	}
 
-	/** A chunk packet is being handled: note it if the server sent it (not a hand-off filling the level). */
-	public static void onServerChunk(ClientboundLevelChunkWithLightPacket packet) {
-		if (!filling) {
-			serverChunks.add(ChunkPos.pack(ClientVersioned.chunkX(packet), ClientVersioned.chunkZ(packet)));
+	/**
+	 * A chunk packet is being handled: note it if the server sent it (not a hand-off filling
+	 * the level). Returns whether to skip it.
+	 */
+	public static boolean onServerChunk(ClientboundLevelChunkWithLightPacket packet) {
+		if (filling) {
+			return false;
 		}
+		long pos = ChunkPos.pack(ClientVersioned.chunkX(packet), ClientVersioned.chunkZ(packet));
+		serverChunks.add(pos);
+		// The server resends every chunk after the respawn. One identical to what the hand-off
+		// filled in is skipped: handling it would re-light and re-mesh it all for nothing.
+		byte[] filled = filledData.remove(pos);
+		ClientLevel level = Minecraft.getInstance().level;
+		return filled != null && level != null && level.getChunkSource().getChunk(ClientVersioned.chunkX(packet), ClientVersioned.chunkZ(packet), false) != null
+				&& Arrays.equals(filled, ((ChunkPacketDataAccessor) ClientVersioned.chunkData(packet)).netherview$getBuffer());
 	}
 
 	/**
@@ -373,12 +485,50 @@ public final class DimensionHandoff {
 		if (from == null || to == null || from == to) {
 			return;
 		}
+		if (arrivalGeometry != null) {
+			// The camera is drawn between the player's last two ticks: a new player object has
+			// only one, so it would jump to the end of this tick and stand still until the
+			// next (most visible flying or sprinting). Carry the previous tick through too.
+			float[] previousRotation = arrivalGeometry.toDestRotation(from.yRotO, from.xRotO);
+			setPrevious(to, arrivalGeometry.toDest(new Vec3(from.xo, from.yo, from.zo)), previousRotation[0], previousRotation[1]);
+			float turn = to.getYRot() - from.getYRot();
+			to.yBodyRot = from.yBodyRot + turn;
+			to.yBodyRotO = from.yBodyRotO + turn;
+			to.yHeadRot = from.yHeadRot + turn;
+			to.yHeadRotO = from.yHeadRotO + turn;
+			to.xBob = from.xBob;
+			to.xBobO = from.xBobO;
+			to.yBob = from.yBob + turn;
+			to.yBobO = from.yBobO + turn;
+			// View bobbing's walk cycle, or the view would jolt as it restarts.
+			copyFields(from.avatarState(), to.avatarState(), "walkDist", "walkDistO", "bob", "bobO");
+		}
 		to.getInventory().replaceWith(from.getInventory());
 		to.getInventory().setSelectedSlot(from.getInventory().getSelectedSlot());
 		((LivingEntityAccessor) to).netherview$setAttackStrengthTicker(((LivingEntityAccessor) from).netherview$getAttackStrengthTicker());
 		((LivingEntityAccessor) to).netherview$setItemSwapTicker(((LivingEntityAccessor) from).netherview$getItemSwapTicker());
 		((PlayerAccessor) to).netherview$setLastItemInMainHand(((PlayerAccessor) from).netherview$getLastItemInMainHand());
 		ClientVersioned.carryHands(from, to);
+	}
+
+	private static void setPrevious(LocalPlayer player, Vec3 position, float yRot, float xRot) {
+		player.xo = player.xOld = position.x;
+		player.yo = player.yOld = position.y;
+		player.zo = player.zOld = position.z;
+		player.yRotO = yRot;
+		player.xRotO = xRot;
+	}
+
+	private static void copyFields(Object from, Object to, String... names) {
+		for (String name : names) {
+			try {
+				java.lang.reflect.Field field = from.getClass().getDeclaredField(name);
+				field.setAccessible(true);
+				field.set(to, field.get(from));
+			} catch (ReflectiveOperationException | RuntimeException ignored) {
+				// cosmetic only: that part of the animation restarts
+			}
+		}
 	}
 
 	private static void placeAtArrival() {

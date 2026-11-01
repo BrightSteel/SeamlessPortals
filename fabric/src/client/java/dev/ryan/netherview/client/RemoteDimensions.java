@@ -26,9 +26,11 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.LevelChunk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -59,6 +61,18 @@ public final class RemoteDimensions {
 	/** Every view, bridge included, as last published: mixins ask from worker threads too (26.1's culling graph). */
 	private static volatile List<RemoteDimension> published = List.of();
 	private static int bridgeTicks;
+	/**
+	 * A view of the player's own dimension around a portal they're backing into, built ahead
+	 * so it can become the window back on arrival already meshed; see {@link #prepareWayBack}.
+	 */
+	private static RemoteDimension prepared;
+	/** Chunks of the player's level still to copy into {@link #prepared}, nearest first. */
+	private static final ArrayDeque<ChunkPos> preparedQueue = new ArrayDeque<>();
+	private static int preparedIdleTicks;
+	/** Chunks copied into the prepared view each frame (copying them all at once would hitch). */
+	private static final int PREPARED_CHUNKS_PER_FRAME = 8;
+	/** Ticks the prepared view is kept once the player is no longer near a portal. */
+	private static final int PREPARED_KEEP_TICKS = 100;
 	/** The bridge's entities were copied into the new level: drop its own after {@link #BRIDGE_ENTITY_TICKS}. */
 	private static boolean dropBridgeEntities;
 	/** The new level's copies only show from the frame after the hand-off, so the bridge's cover it until then. */
@@ -184,25 +198,138 @@ public final class RemoteDimensions {
 	/**
 	 * The player just came through {@code back}'s destination: install the way back right
 	 * away (so that portal is a window from the first frame, not a swirl until the server's
-	 * next scan) and seed its remote level with the chunks of the dimension just left.
+	 * next scan) and seed its remote level with the chunks and entities of the dimension just left.
 	 */
-	static void installArrival(PortalLink back, ResourceKey<Level> backDimension, List<ClientboundLevelChunkWithLightPacket> chunks) {
+	static RemoteDimension installArrival(PortalLink back, ResourceKey<Level> backDimension, List<ClientboundLevelChunkWithLightPacket> chunks,
+			List<Packet<ClientGamePacketListener>> entities) {
 		Minecraft minecraft = Minecraft.getInstance();
 		syncLevel(minecraft);
 		Link link = new Link(back, PortalGeometry.of(back), backDimension);
 		TYPES.put(backDimension, back.destDimensionType());
-		RemoteDimension remote = view(backDimension, 0);
 		ChunkPos center = ChunkPos.containing(BlockPos.containing(link.geometry().destCenter()));
-		remote.centerOn(center);
+		RemoteDimension remote;
+		if (prepared != null && prepared.key == backDimension && center.equals(prepared.center())) {
+			// Built while the player backed in: already meshed, it only lacks what wasn't copied yet.
+			remote = prepared;
+			prepared = null;
+			preparedQueue.clear();
+			VIEWS.computeIfAbsent(backDimension, key -> new ArrayList<>()).addFirst(remote);
+			publishRemoteLevels();
+		} else {
+			remote = view(backDimension, 0);
+			remote.centerOn(center);
+		}
 		// Nearest first, and the chunks right behind the window at once: the player may be
 		// looking straight back through it, and the light queue would hold them for a while.
 		List<ClientboundLevelChunkWithLightPacket> ordered = new ArrayList<>(chunks);
 		ordered.sort(Comparator.comparingInt(chunk -> arrivalDistance(chunk, center)));
 		for (ClientboundLevelChunkWithLightPacket chunk : ordered) {
-			remote.acceptChunk(chunk, arrivalDistance(chunk, center) <= ARRIVAL_NOW_RADIUS);
+			if (remote.level.getChunkSource().getChunk(ClientVersioned.chunkX(chunk), ClientVersioned.chunkZ(chunk), false) == null) {
+				remote.acceptChunk(chunk, arrivalDistance(chunk, center) <= ARRIVAL_NOW_RADIUS);
+			}
 		}
+		replay(remote, entities);
 		links = List.of(link);
 		PortalHiding.setLinks(links);
+		return remote;
+	}
+
+	/** Handle entity packets as if the server had sent them to {@code view}'s level. */
+	private static void replay(RemoteDimension view, List<Packet<ClientGamePacketListener>> packets) {
+		ClientPacketListener connection = Minecraft.getInstance().getConnection();
+		if (connection == null || packets.isEmpty()) {
+			return;
+		}
+		ClientPacketListenerAccessor listener = (ClientPacketListenerAccessor) connection;
+		ClientLevel playerLevel = listener.netherview$getLevel();
+		listener.netherview$setLevel(view.level);
+		try {
+			for (Packet<ClientGamePacketListener> packet : packets) {
+				try {
+					packet.handle(connection);
+				} catch (RuntimeException e) {
+					LOGGER.debug("Way-back entity packet failed for {}: {}", view.key.identifier(), e.toString());
+				}
+			}
+		} finally {
+			listener.netherview$setLevel(playerLevel);
+		}
+	}
+
+	/**
+	 * The player is backing into {@code link} (its window is behind them): keep a copy of their
+	 * own level around it, filled a few chunks a frame, for {@link PortalViewRenderer} to mesh
+	 * from their camera. If they go through, {@link #installArrival} takes it as the way back.
+	 * Returns it, or null if there's nothing to prepare (a portal within this world).
+	 */
+	static RemoteDimension prepareWayBack(Link link) {
+		Minecraft minecraft = Minecraft.getInstance();
+		ClientLevel level = minecraft.level;
+		if (level == null || link.dest() == level.dimension()) {
+			return null;
+		}
+		preparedIdleTicks = 0;
+		ChunkPos center = ChunkPos.containing(BlockPos.containing(link.geometry().sourceCenter()));
+		if (bridge != null && bridge.key == level.dimension() && center.equals(bridge.center())) {
+			return null; // just arrived through this portal: the bridge becomes this view when it retires
+		}
+		if (prepared != null && prepared.key == level.dimension() && !center.equals(prepared.center())) {
+			// Another portal: move the view rather than build a new one (its first render stalls).
+			prepared.centerOn(center);
+			queuePrepared(center);
+		}
+		if (prepared == null || prepared.key != level.dimension()) {
+			closePrepared();
+			String type = level.dimensionTypeRegistration().unwrapKey().map(key -> key.identifier().toString()).orElse("minecraft:overworld");
+			prepared = new RemoteDimension(minecraft, level.dimension(), type);
+			prepared.centerOn(center);
+			queuePrepared(center);
+			publishRemoteLevels();
+		}
+		for (int i = 0; i < PREPARED_CHUNKS_PER_FRAME && !preparedQueue.isEmpty(); i++) {
+			ChunkPos pos = preparedQueue.poll();
+			if (prepared.level.getChunkSource().getChunk(pos.x(), pos.z(), false) != null) {
+				continue; // kept from before it moved
+			}
+			LevelChunk chunk = level.getChunkSource().getChunk(pos.x(), pos.z(), false);
+			if (chunk == null) {
+				preparedQueue.add(pos); // not loaded yet (just joined or arrived): try again later
+				continue;
+			}
+			int ring = Math.max(Math.abs(pos.x() - center.x()), Math.abs(pos.z() - center.z()));
+			prepared.acceptChunk(new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null), ring <= ARRIVAL_NOW_RADIUS);
+		}
+		return prepared;
+	}
+
+	/** The chunks around {@code center} to copy into the prepared view, nearest first. */
+	private static void queuePrepared(ChunkPos center) {
+		preparedQueue.clear();
+		int radius = RemoteDimension.chunkRadius();
+		for (int ring = 0; ring <= radius; ring++) {
+			for (int x = center.x() - ring; x <= center.x() + ring; x++) {
+				for (int z = center.z() - ring; z <= center.z() + ring; z++) {
+					if (Math.max(Math.abs(x - center.x()), Math.abs(z - center.z())) == ring) {
+						preparedQueue.add(new ChunkPos(x, z));
+					}
+				}
+			}
+		}
+	}
+
+	/** Whether the prepared view of {@code dimension} around {@code center} already has chunk x, z. */
+	static boolean preparedHas(ResourceKey<Level> dimension, ChunkPos center, int x, int z) {
+		return prepared != null && prepared.key == dimension && center.equals(prepared.center())
+				&& prepared.level.getChunkSource().getChunk(x, z, false) != null;
+	}
+
+	private static void closePrepared() {
+		preparedQueue.clear();
+		if (prepared != null) {
+			prepared.close();
+			prepared = null;
+			publishRemoteLevels();
+		}
 	}
 
 	private static int arrivalDistance(ClientboundLevelChunkWithLightPacket chunk, ChunkPos center) {
@@ -227,6 +354,22 @@ public final class RemoteDimensions {
 		dropBridgeEntities = entitiesCopied;
 		PortalViewRenderer.forgetRemotes();
 		views.forEach(RemoteDimension::close);
+		publishRemoteLevels();
+	}
+
+	/**
+	 * The bridge is done. It is a meshed copy of the player's new level around the portal they
+	 * came out of, which is what {@link #prepareWayBack} would build (at a cost, a frame's
+	 * stall) for a trip back through it: keep it as that instead of closing it.
+	 */
+	private static void retireBridge() {
+		// Nothing is destroyed, so only the bridge pass is forgotten: a full reset would also
+		// lose a crossing in progress (the player may be walking straight back).
+		PortalViewRenderer.forgetBridge();
+		closePrepared();
+		prepared = bridge;
+		preparedIdleTicks = 0;
+		bridge = null;
 		publishRemoteLevels();
 	}
 
@@ -342,6 +485,9 @@ public final class RemoteDimensions {
 				view.tick(minecraft.level);
 			}
 		}
+		if (prepared != null && ++preparedIdleTicks > PREPARED_KEEP_TICKS) {
+			closePrepared();
+		}
 		if (bridge != null) {
 			bridge.tick(minecraft.level);
 			bridgeTicks++;
@@ -363,8 +509,10 @@ public final class RemoteDimensions {
 					&& ClientVersioned.isSectionCompiledAndVisible(minecraft.levelRenderer, ClientVersioned.mainCamera().blockPosition())
 					&& ClientVersioned.mainRenderedSections() * 10 >= bridge.renderer.renderedSections() * 9
 					&& minecraft.levelRenderer.hasRenderedAllSections();
-			if (caughtUp || bridgeTicks >= BRIDGE_MAX_TICKS || bridge.level.dimension() != minecraft.level.dimension()) {
+			if (bridge.level.dimension() != minecraft.level.dimension()) {
 				closeBridge();
+			} else if (caughtUp || bridgeTicks >= BRIDGE_MAX_TICKS) {
+				retireBridge();
 			}
 		}
 	}
@@ -372,6 +520,7 @@ public final class RemoteDimensions {
 	/** Everything, bridge included (disconnect). */
 	public static void clear() {
 		closeBridge();
+		closePrepared();
 		clearRemotes();
 	}
 
@@ -391,6 +540,9 @@ public final class RemoteDimensions {
 		VIEWS.values().forEach(all::addAll);
 		if (bridge != null) {
 			all.add(bridge);
+		}
+		if (prepared != null) {
+			all.add(prepared);
 		}
 		return all;
 	}

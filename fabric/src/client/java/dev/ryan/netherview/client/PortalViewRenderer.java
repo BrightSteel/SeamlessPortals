@@ -43,8 +43,10 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
+import org.joml.Vector3f;
 import org.joml.Vector3fc;
 import org.joml.Vector4f;
 import org.slf4j.Logger;
@@ -125,6 +127,12 @@ public final class PortalViewRenderer {
 	}
 
 	private static final List<Pass> passes = new ArrayList<>();
+	/** Within this many blocks of a portal whose window isn't drawn, see {@link #warmBehind}. */
+	private static final double WARM_DISTANCE = 2.5;
+	/** Within this many blocks of a portal, the way back through it is prepared (see {@link RemoteDimensions#prepareWayBack}). */
+	private static final double PREPARE_DISTANCE = 12.0;
+	private static final int WARM_INTERVAL_FRAMES = 3;
+	private static int warmFrames;
 	private static final List<Link> cards = new ArrayList<>();
 	/** Which view each live portal (by its lowest block) used last frame, so it keeps its meshes and visibility. */
 	private static Map<BlockPos, RemoteDimension> assignments = new HashMap<>();
@@ -140,11 +148,22 @@ public final class PortalViewRenderer {
 	private static Link crossedLink;
 	private static long crossedAt;
 	private static boolean activeFullscreen;
+	/** See {@link #arrivedThrough}. */
+	private static Vec3 arrivalCenter;
+	private static Vec3 arrivalOutward;
+	private static long arrivalUntil;
+	private static boolean arrivalPending;
+	private static final long ARRIVAL_IGNORE_MS = 1500L;
+	private static final double ARRIVAL_CLEAR_DISTANCE = 0.25;
 	private static Vec3 lastEye;
 	private static RemoteDimension activeRemote;
 	private static GpuBufferSlice levelProjectionBuffer;
+	/** This frame's {@link #projectionCenter} and the eye it puts in the world. */
+	private static Vector3f projectionCenter = new Vector3f();
+	private static Vec3 visualEye = Vec3.ZERO;
 	private static boolean loggedFailure;
 	private static RenderTarget lastRemoteTarget;
+	private static RenderTarget leftBehind;
 
 	private PortalViewRenderer() {
 	}
@@ -164,8 +183,10 @@ public final class PortalViewRenderer {
 		}
 		Camera main = ClientVersioned.mainCamera();
 		levelProjectionBuffer = RenderSystem.getProjectionMatrixBuffer();
+		projectionCenter = projectionCenter(levelProjection);
+		visualEye = main.position().add(toWorld(main, projectionCenter));
 		renderBridge(minecraft, main, levelProjection);
-		trackCrossing(main.position());
+		trackCrossing(visualEye);
 		activeFullscreen = false;
 		if (crossedLink != null) {
 			renderCrossed(minecraft, main, levelProjection);
@@ -211,6 +232,21 @@ public final class PortalViewRenderer {
 		if (crossedLink != null && Util.getMillis() - crossedAt > CROSSED_TIMEOUT_MS) {
 			crossedLink = null;
 		}
+		if (arrivalPending) {
+			arrivalPending = false;
+			if (crossedLink == null && eye.subtract(arrivalCenter).dot(arrivalOutward) < 0) {
+				// Arrived with the camera still behind the plane of the portal come out of: as
+				// far as the eye goes, the crossing isn't over. Draw it as crossed the other
+				// way (the world left, the new one in the opening) until the camera is out.
+				for (Link link : RemoteDimensions.links()) {
+					if (link.geometry().sourceCenter().distanceToSqr(arrivalCenter) < 0.01 && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
+						crossedLink = link;
+						crossedAt = Util.getMillis();
+						return;
+					}
+				}
+			}
+		}
 		if (previous == null || previous.distanceToSqr(eye) > 16.0) {
 			return;
 		}
@@ -220,7 +256,14 @@ public final class PortalViewRenderer {
 			}
 			return;
 		}
+		if (arrivalCenter != null && (Util.getMillis() > arrivalUntil || eye.subtract(arrivalCenter).dot(arrivalOutward) > ARRIVAL_CLEAR_DISTANCE)) {
+			arrivalCenter = null;
+		}
 		for (Link link : RemoteDimensions.links()) {
+			if (arrivalCenter != null && link.geometry().sourceCenter().distanceToSqr(arrivalCenter) < 0.01
+					&& eye.subtract(previous).dot(arrivalOutward) > 0) {
+				continue; // still coming out of the portal just arrived through, not going into it
+			}
 			// End portals are fallen into feet first: the server moves the player before the
 			// camera reaches the surface, so there is no crossing to preview.
 			if (!link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
@@ -253,6 +296,19 @@ public final class PortalViewRenderer {
 				LOGGER.error("Crossed-portal pass failed", e);
 			}
 		}
+	}
+
+	/**
+	 * The player has just come out of the portal at {@code center}, heading {@code outward}.
+	 * The server can move them a moment before their camera reaches the plane they went in by,
+	 * so they arrive still behind this one's: carrying on through it is the same trip, not a
+	 * new one into wherever this portal leads.
+	 */
+	static void arrivedThrough(Vec3 center, Vec3 outward) {
+		arrivalCenter = center;
+		arrivalOutward = outward;
+		arrivalUntil = Util.getMillis() + ARRIVAL_IGNORE_MS;
+		arrivalPending = true;
 	}
 
 	/** The player is through a portal and waiting for the server to catch up (the destination is being shown). */
@@ -319,6 +375,54 @@ public final class PortalViewRenderer {
 			}
 		}
 		assignments = assigned;
+		warmBehind(minecraft, main, levelProjection);
+	}
+
+	/**
+	 * What the player sees right after going through is mostly not what the windows showed
+	 * before: through the window back, their own level (a view created only then), and when
+	 * they back in, the far side they'll face (that window was behind them, never drawn).
+	 * Near a portal, take turns rendering these now and then, not shown, just so they're
+	 * meshed in time: a prepared copy of their own level ({@link RemoteDimensions#prepareWayBack})
+	 * from their own camera, roughly what the window back will show; and while the portal's
+	 * window isn't drawn, its far side from the camera they'd have through it (as
+	 * {@link #renderCrossed} will).
+	 */
+	private static void warmBehind(Minecraft minecraft, Camera main, Matrix4f levelProjection) {
+		int phase = ++warmFrames % WARM_INTERVAL_FRAMES;
+		Vec3 eye = main.position();
+		Link nearest = null;
+		for (Link link : RemoteDimensions.links()) {
+			if (!link.geometry().horizontal() && link.geometry().sourceBox().inflate(PREPARE_DISTANCE).contains(eye)
+					&& (nearest == null || link.geometry().sourceCenter().distanceToSqr(eye) < nearest.geometry().sourceCenter().distanceToSqr(eye))) {
+				nearest = link;
+			}
+		}
+		if (nearest != null) {
+			Link link = nearest;
+			// Prepared from a way off: its first render is a stall, better not right at the portal.
+			RemoteDimension back = RemoteDimensions.prepareWayBack(link);
+			RemoteDimension remote = RemoteDimensions.viewFor(link.link(), link.dest());
+			// A drawn window is meshing that side already (and its view is busy).
+			boolean farSide = remote != null && link.geometry().sourceBox().inflate(WARM_DISTANCE).contains(eye)
+					&& passes.stream().noneMatch(pass -> pass.view() == remote);
+			try {
+				if (phase == 0 && farSide) {
+					PortalGeometry geometry = link.geometry();
+					Vec3 remoteEye = geometry.toDest(eye);
+					remote.camera.place(main, remote.level, remoteEye, geometry.toDest(main.rotation()));
+					renderLevelInto(minecraft, main, remote, remoteEye, new Matrix4f(levelProjection));
+				} else if (phase == 1 && back != null) {
+					back.camera.place(main, back.level, eye, main.rotation());
+					renderLevelInto(minecraft, main, back, eye, new Matrix4f(levelProjection));
+				}
+			} catch (RuntimeException e) {
+				if (!loggedFailure) {
+					loggedFailure = true;
+					LOGGER.error("Warm-up pass failed", e);
+				}
+			}
+		}
 	}
 
 	/** Whether the opening still holds its fill (a broken portal stops being a window). */
@@ -478,7 +582,7 @@ public final class PortalViewRenderer {
 		// Place once to get the view rotation for the clip plane, then again with the culling
 		// frustum narrowed to the portal (the rotation is unchanged, so the plane still holds).
 		remote.camera.place(main, remote.level, remoteEye, orientation);
-		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye));
+		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye, projectionCenter));
 		remote.camera.place(main, remote.level, remoteEye, orientation, narrowedToRect(levelProjection, rect));
 		remote.renderer.forceRecull();
 		renderLevelInto(minecraft, main, remote, remoteEye, projection);
@@ -581,14 +685,40 @@ public final class PortalViewRenderer {
 	 * The destination portal plane in the remote camera's view space, as (n, d) with
 	 * n·v + d ≥ 0 on the side that should stay visible (the side away from the camera).
 	 */
-	private static Vector4f clipPlane(PortalGeometry geometry, Camera remoteCamera, Vec3 remoteEye) {
+	private static Vector4f clipPlane(PortalGeometry geometry, Camera remoteCamera, Vec3 remoteEye, Vector3f center) {
 		Vec3 normal = geometry.destNormal();
 		Vec3 keep = remoteEye.subtract(geometry.destCenter()).dot(normal) >= 0 ? normal.scale(-1) : normal;
 		Vec3 planePoint = geometry.destCenter().add(keep.scale(PORTAL_PLANE_OFFSET));
-		double distance = Math.min(keep.dot(remoteEye.subtract(planePoint)), -MIN_CLIP_DISTANCE);
 		Vector4f viewNormal = remoteCamera.getViewRotationMatrix(new Matrix4f())
 				.transform(new Vector4f((float) keep.x, (float) keep.y, (float) keep.z, 0.0F));
+		// The plane must stay ahead of where the projection converges, which view bobbing
+		// moves off the camera: an oblique near plane behind that point clips the wrong side.
+		double atCenter = viewNormal.x * center.x + viewNormal.y * center.y + viewNormal.z * center.z;
+		double distance = Math.min(keep.dot(remoteEye.subtract(planePoint)), -MIN_CLIP_DISTANCE - atCenter);
 		return new Vector4f(viewNormal.x, viewNormal.y, viewNormal.z, (float) distance);
+	}
+
+	/**
+	 * Where the level projection converges, in view space: the eye as actually rendered.
+	 * Vanilla folds view bobbing into the projection, so this moves a few centimetres off the
+	 * camera with each step (along the view's up axis, which looking down is nearly
+	 * horizontal: enough to be through a portal's plane before the camera is).
+	 */
+	private static Vector3f projectionCenter(Matrix4f projection) {
+		Vector4f r0 = projection.getRow(0, new Vector4f());
+		Vector4f r1 = projection.getRow(1, new Vector4f());
+		Vector4f r3 = projection.getRow(3, new Vector4f());
+		// Clip x, y and w are all zero there: three rows, three unknowns.
+		Matrix3f rows = new Matrix3f(r0.x, r1.x, r3.x, r0.y, r1.y, r3.y, r0.z, r1.z, r3.z);
+		if (Math.abs(rows.determinant()) < 1.0E-9F) {
+			return new Vector3f();
+		}
+		return rows.invert().transform(new Vector3f(-r0.w, -r1.w, -r3.w));
+	}
+
+	private static Vec3 toWorld(Camera camera, Vector3f viewOffset) {
+		Vector3f world = camera.getViewRotationMatrix(new Matrix4f()).invert().transformDirection(new Vector3f(viewOffset));
+		return new Vec3(world.x, world.y, world.z);
 	}
 
 	/**
@@ -628,6 +758,11 @@ public final class PortalViewRenderer {
 			result.setRow(2, zZeroToOne ? scaledPlane : scaledPlane.sub(wRow));
 		}
 		return result;
+	}
+
+	/** The bridge stopped being one (it lives on as another view). */
+	static void forgetBridge() {
+		bridgeRendered = null;
 	}
 
 	/** Called when remote dimensions are torn down, so nothing keeps a destroyed target. */
@@ -701,7 +836,16 @@ public final class PortalViewRenderer {
 		activeRemote = null;
 		if (crossed != null && crossedView != null && activeFullscreen) {
 			activeFullscreen = false;
-			blitFullscreen(ClientVersioned.mainRenderTarget(), crossedView, REPLACE_PIPELINE);
+			// The far side replaces the frame, but looking back at the portal (backing through
+			// it), its opening must still show the side being left, which the main view has
+			// just drawn: keep that inside the opening, as the window back will once the
+			// server moves the player. Otherwise it shows whatever is behind that portal.
+			RenderTarget mainTarget = ClientVersioned.mainRenderTarget();
+			RenderTarget left = leftBehind(mainTarget);
+			RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(mainTarget.getColorTexture(), left.getColorTexture(),
+					0, 0, 0, 0, 0, mainTarget.width, mainTarget.height);
+			blitFullscreen(mainTarget, crossedView, REPLACE_PIPELINE);
+			drawWindow(crossed, left, null);
 			return;
 		}
 		for (Pass pass : passes) {
@@ -714,7 +858,7 @@ public final class PortalViewRenderer {
 			switch (card.link().source().fill()) {
 				case NETHER_PORTAL, WATER, LAVA -> drawTexturedCard(card);
 				case END_PORTAL, END_GATEWAY -> card.geometry().sourceBlocks().forEach(pos -> unhiddenEnds.add(pos.immutable()));
-				case NONE -> drawWindow(card, null, cardColor(card));
+				case NONE -> drawWindow(card, (RenderTarget) null, cardColor(card));
 			}
 		}
 		PortalHiding.setUnhiddenEndPortals(unhiddenEnds);
@@ -740,6 +884,22 @@ public final class PortalViewRenderer {
 	 * by screen position, or (with no view) as a flat card in {@code color}.
 	 */
 	private static void drawWindow(Link link, RemoteDimension view, Vector4f color) {
+		drawWindow(link, view == null ? null : view.target, color);
+	}
+
+	/** A copy of the main view as drawn this frame, for {@link #compositeAll} while crossing. */
+	private static RenderTarget leftBehind(RenderTarget mainTarget) {
+		if (leftBehind == null || leftBehind.width != mainTarget.width || leftBehind.height != mainTarget.height) {
+			if (leftBehind != null) {
+				leftBehind.destroyBuffers();
+			}
+			leftBehind = ClientVersioned.newTarget("netherview left behind", mainTarget.width, mainTarget.height);
+		}
+		return leftBehind;
+	}
+
+	/** The portal opening filled with {@code source}'s image (by screen position), or with {@code color} if there's none. */
+	private static void drawWindow(Link link, RenderTarget source, Vector4f color) {
 		Minecraft minecraft = Minecraft.getInstance();
 		GameRenderer gameRenderer = minecraft.gameRenderer;
 		RenderTarget mainTarget = ClientVersioned.mainRenderTarget();
@@ -749,8 +909,9 @@ public final class PortalViewRenderer {
 		// shallow open box. Up close the front quad falls inside the camera's near plane and
 		// is clipped; the back and side faces still cover exactly the opening's pixels, and
 		// every fragment samples the far side by screen position, so the image is unchanged.
-		Vec3[] front = link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET);
-		Vec3[] back = link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET - WINDOW_DEPTH);
+		// Which side the box extends to follows the eye as rendered (see projectionCenter).
+		Vec3[] front = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET);
+		Vec3[] back = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET - WINDOW_DEPTH);
 		Vec3[] box = {front[0], front[1], front[2], front[3], back[0], back[1], back[2], back[3]};
 		int[] triangles = {
 				0, 1, 2, 0, 2, 3, // front (the opening)
@@ -773,11 +934,11 @@ public final class PortalViewRenderer {
 					GpuBufferSlice transforms = ClientVersioned.transform(new Matrix4f(mainCamera.viewRotationMatrix), color);
 					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
 					try (RenderPass pass = ClientVersioned.renderPass(() -> "netherview portal window", mainTarget)) {
-						ClientVersioned.setPipeline(pass, view != null ? COMPOSITE_PIPELINE : CARD_PIPELINE);
+						ClientVersioned.setPipeline(pass, source != null ? COMPOSITE_PIPELINE : CARD_PIPELINE);
 						RenderSystem.bindDefaultUniforms(pass);
 						pass.setUniform("DynamicTransforms", transforms);
-						if (view != null) {
-							ClientVersioned.bindTexture(pass, "Sampler0", view.target.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+						if (source != null) {
+							ClientVersioned.bindTexture(pass, "Sampler0", source.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
 						}
 						ClientVersioned.drawVertices(pass, vertices, triangles.length);
 					}
