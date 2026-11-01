@@ -43,6 +43,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -69,7 +70,10 @@ import java.util.UUID;
  */
 public final class PortalViewServer {
 	private static final int SCAN_INTERVAL_TICKS = 10;
-	/** How often already-sent chunks are re-encoded and re-sent if they changed. */
+	/**
+	 * How often each already-sent chunk is re-encoded and re-sent if it changed. The check is
+	 * spread over the scans in that time (a slice per scan), so it never lands in one tick.
+	 */
 	private static final int RESEND_CHECK_TICKS = 100;
 	private static final int FOUND_DEST_CACHE_TICKS = 1200;
 	private static final int VIRTUAL_DEST_CACHE_TICKS = 200;
@@ -325,7 +329,7 @@ public final class PortalViewServer {
 			// A mod client drops every remote level when its own level changes (portal, /tp,
 			// respawn), so nothing sent before counts any more: start streaming afresh.
 			state.sentChunkHashes.clear();
-			state.lastFullCheck.clear();
+			state.recheckCursor.clear();
 			state.entities.clear();
 			state.streamedFrom = level.dimension();
 		}
@@ -342,7 +346,7 @@ public final class PortalViewServer {
 		}
 	}
 
-	/** The portals around the player they may see through, nearest first. */
+	/** The portals around the player they may see through, nearest first, at most {@link ServerConfig#maxPortals()}. */
 	private static List<PortalLink> findLinks(MinecraftServer server, ServerPlayer player, int now) {
 		List<PortalLink> links = new ArrayList<>();
 		ServerLevel level = player.level();
@@ -357,7 +361,7 @@ public final class PortalViewServer {
 		}
 		links.sort(Comparator.comparingDouble(link ->
 				PortalGeometry.center(link.source()).distanceToSqr(player.position())));
-		return links;
+		return links.size() > config.maxPortals() ? List.copyOf(links.subList(0, config.maxPortals())) : links;
 	}
 
 	private static void findNetherLinks(MinecraftServer server, ServerLevel level, BlockPos center, int now, List<PortalLink> out) {
@@ -600,15 +604,14 @@ public final class PortalViewServer {
 
 	private static void sendChunks(ServerPlayer player, PlayerState state, ServerLevel dest, String destId, List<Vec3> centers, int now) {
 		// Nearest destination first, so its view fills in before the others.
-		List<ChunkPos> wanted = new ArrayList<>();
+		Set<ChunkPos> wantedSet = new LinkedHashSet<>();
 		for (Vec3 center : centers) {
 			ChunkPos centerChunk = ChunkPos.containing(BlockPos.containing(center));
 			if (config.tickDestination()) {
 				dest.getChunkSource().addTicketWithRadius(TicketType.PORTAL, centerChunk, config.viewRadiusChunks());
 			}
 			for (ChunkPos pos : chunksAround(centerChunk, config.viewRadiusChunks())) {
-				if (!wanted.contains(pos)) {
-					wanted.add(pos);
+				if (wantedSet.add(pos)) {
 					if (!config.tickDestination()) {
 						loadWithoutTicking(dest, pos);
 					}
@@ -616,35 +619,45 @@ public final class PortalViewServer {
 			}
 		}
 
+		List<ChunkPos> wanted = new ArrayList<>(wantedSet);
 		Map<Long, Integer> sent = state.sentChunkHashes.computeIfAbsent(destId, d -> new HashMap<>());
-		int lastFullCheck = state.lastFullCheck.getOrDefault(destId, now);
-		state.lastFullCheck.putIfAbsent(destId, now);
-		boolean fullCheck = now - lastFullCheck >= RESEND_CHECK_TICKS;
 		int budget = config.chunksPerScan();
+		// Chunks not sent yet, nearest first.
 		for (ChunkPos pos : wanted) {
-			long key = pos.pack();
-			if (!fullCheck && sent.containsKey(key)) {
-				continue;
-			}
-			LevelChunk chunk = dest.getChunkSource().getChunkNow(pos.x(), pos.z());
-			if (chunk == null) {
-				continue;
-			}
-			byte[] bytes = encodeChunk(dest, chunk);
-			int hash = Arrays.hashCode(bytes);
-			Integer previous = sent.get(key);
-			if (previous != null && previous == hash) {
-				continue;
-			}
-			sender.send(player, new RemoteChunkPayload(destId, bytes), RemoteChunkPayload.STREAM_CODEC);
-			sent.put(key, hash);
-			if (--budget == 0) {
+			if (budget == 0) {
 				return;
 			}
+			if (!sent.containsKey(pos.pack()) && sendIfChanged(player, dest, destId, pos, sent)) {
+				budget--;
+			}
 		}
-		if (fullCheck) {
-			state.lastFullCheck.put(destId, now);
+		// Then this scan's slice of the sent ones, in case they changed.
+		int slice = Math.ceilDiv(wanted.size() * SCAN_INTERVAL_TICKS, RESEND_CHECK_TICKS);
+		int cursor = state.recheckCursor.getOrDefault(destId, 0);
+		for (int i = 0; i < slice && budget > 0; i++) {
+			ChunkPos pos = wanted.get((cursor + i) % wanted.size());
+			if (sent.containsKey(pos.pack()) && sendIfChanged(player, dest, destId, pos, sent)) {
+				budget--;
+			}
 		}
+		state.recheckCursor.put(destId, wanted.isEmpty() ? 0 : (cursor + slice) % wanted.size());
+	}
+
+	/** Sends the chunk if it's loaded and differs from what this player was last sent. */
+	private static boolean sendIfChanged(ServerPlayer player, ServerLevel dest, String destId, ChunkPos pos, Map<Long, Integer> sent) {
+		LevelChunk chunk = dest.getChunkSource().getChunkNow(pos.x(), pos.z());
+		if (chunk == null) {
+			return false;
+		}
+		byte[] bytes = encodeChunk(dest, chunk);
+		int hash = Arrays.hashCode(bytes);
+		Integer previous = sent.get(pos.pack());
+		if (previous != null && previous == hash) {
+			return false;
+		}
+		sender.send(player, new RemoteChunkPayload(destId, bytes), RemoteChunkPayload.STREAM_CODEC);
+		sent.put(pos.pack(), hash);
+		return true;
 	}
 
 	/**
@@ -687,7 +700,8 @@ public final class PortalViewServer {
 		List<PortalLink> links = List.of();
 		/** Per destination dimension: chunk → hash of the bytes last sent. */
 		final Map<String, Map<Long, Integer>> sentChunkHashes = new HashMap<>();
-		final Map<String, Integer> lastFullCheck = new HashMap<>();
+		/** Per destination, where the next scan's re-check slice starts in its list of chunks. */
+		final Map<String, Integer> recheckCursor = new HashMap<>();
 		final Map<String, RemoteEntityTracker> entities = new HashMap<>();
 		Vec3 lastEye;
 		Vec3 lastFeet;

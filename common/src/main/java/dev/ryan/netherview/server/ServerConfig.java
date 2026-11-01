@@ -25,10 +25,13 @@ package dev.ryan.netherview.server;
  *                              side behind the portal, only where they look through it)
  * @param fallbackDepth         how far behind a portal (in blocks) that copy reaches; deeper
  *                              shows more of the far side but sends more blocks
+ * @param maxPortals            at most this many portals per player (the nearest within
+ *                              {@code scanRadius}) show their far side; the rest are left as
+ *                              vanilla portals for that player: no view, vanilla travel
  */
 public record ServerConfig(int scanRadius, int streamedDestinations, int viewRadiusChunks, int chunksPerScan, double entityRadius, int maxPortalSize,
-		boolean tickDestination, boolean seamlessTravel, boolean fallbackViews, int fallbackDepth) {
-	public static final ServerConfig DEFAULTS = new ServerConfig(24, 2, 4, 8, 24.0, 21, false, true, true, 24);
+		boolean tickDestination, boolean seamlessTravel, boolean fallbackViews, int fallbackDepth, int maxPortals) {
+	public static final ServerConfig DEFAULTS = new ServerConfig(24, 2, 8, 8, 24.0, 21, false, true, true, 24, 4);
 
 	/** Clamps values to sane ranges so a bad config can't make the server do unbounded work. */
 	public ServerConfig {
@@ -39,5 +42,6 @@ public record ServerConfig(int scanRadius, int streamedDestinations, int viewRad
 		entityRadius = Math.clamp(entityRadius, 0.0, 64.0);
 		maxPortalSize = Math.clamp(maxPortalSize, 2, 21);
 		fallbackDepth = Math.clamp(fallbackDepth, 2, 48);
+		maxPortals = Math.clamp(maxPortals, 1, 32);
 	}
 }

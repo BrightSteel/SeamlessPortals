@@ -53,7 +53,8 @@ public final class NetherViewPlugin extends JavaPlugin implements Listener {
 				this.getConfig().getBoolean("tick-destination", defaults.tickDestination()),
 				this.getConfig().getBoolean("seamless-travel", defaults.seamlessTravel()),
 				this.getConfig().getBoolean("fallback-views", defaults.fallbackViews()),
-				this.getConfig().getInt("fallback-depth", defaults.fallbackDepth())));
+				this.getConfig().getInt("fallback-depth", defaults.fallbackDepth()),
+				this.getConfig().getInt("max-portals", defaults.maxPortals())));
 		PortalStore store = new PortalStore(this);
 		CustomPortals.init((player, node) -> player.getBukkitEntity().hasPermission("netherview." + node), store::save);
 		store.load();

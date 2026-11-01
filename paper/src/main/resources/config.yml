@@ -1,10 +1,16 @@
 # Blocks around a player searched for portals to show through.
 scan-radius: 24
+# At most this many portals per player show their far side: the nearest ones within
+# scan-radius. Any more (a portal farm, say) stay normal vanilla portals for that player,
+# with no view and vanilla travel, and cost the server nothing.
+max-portals: 4
 # How many different portal destinations per player get their chunks and entities streamed
 # (nearest first). Clients render at most this many live portal views that look somewhere different.
 streamed-destinations: 2
-# Chunk radius streamed around each destination.
-view-radius-chunks: 4
+# Chunk radius streamed around each destination (1-8). The chunks there are kept loaded (and
+# ticking, with tick-destination) while someone looks through, and sent to their client
+# (chunks-per-scan at a time, so a bigger radius fills in more slowly rather than all at once).
+view-radius-chunks: 8
 # Chunks sent per player every half second, across all destinations.
 chunks-per-scan: 8
 # Blocks around each destination whose mobs/players/items are mirrored to the viewer (0 = off).

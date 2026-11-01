@@ -118,6 +118,7 @@ public class NetherView implements ModInitializer {
 				properties.setProperty("seamlessTravel", String.valueOf(defaults.seamlessTravel()));
 				properties.setProperty("fallbackViews", String.valueOf(defaults.fallbackViews()));
 				properties.setProperty("fallbackDepth", String.valueOf(defaults.fallbackDepth()));
+				properties.setProperty("maxPortals", String.valueOf(defaults.maxPortals()));
 				try (Writer writer = Files.newBufferedWriter(file)) {
 					properties.store(writer, "NetherView server settings (see ServerConfig for what each does)");
 				}
@@ -132,7 +133,8 @@ public class NetherView implements ModInitializer {
 					Boolean.parseBoolean(properties.getProperty("tickDestination", String.valueOf(defaults.tickDestination()))),
 					Boolean.parseBoolean(properties.getProperty("seamlessTravel", String.valueOf(defaults.seamlessTravel()))),
 					Boolean.parseBoolean(properties.getProperty("fallbackViews", String.valueOf(defaults.fallbackViews()))),
-					Integer.parseInt(properties.getProperty("fallbackDepth", String.valueOf(defaults.fallbackDepth()))));
+					Integer.parseInt(properties.getProperty("fallbackDepth", String.valueOf(defaults.fallbackDepth()))),
+					Integer.parseInt(properties.getProperty("maxPortals", String.valueOf(defaults.maxPortals()))));
 		} catch (IOException | NumberFormatException e) {
 			LOGGER.warn("Couldn't read {}, using defaults: {}", file, e.toString());
 			return defaults;
