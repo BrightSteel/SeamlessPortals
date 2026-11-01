@@ -27,9 +27,14 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.TextureFilteringMethod;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.Lightmap;
 import net.minecraft.client.renderer.culling.Frustum;
+import net.minecraft.client.renderer.entity.state.BoatRenderState;
+import net.minecraft.client.renderer.entity.state.EntityRenderState;
+import net.minecraft.client.renderer.entity.state.LivingEntityRenderState;
+import net.minecraft.client.renderer.entity.state.MinecartRenderState;
 import net.minecraft.client.renderer.fog.FogRenderer;
 import net.minecraft.client.renderer.state.GameRenderState;
 import net.minecraft.client.renderer.state.LightmapRenderState;
@@ -38,6 +43,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.util.Util;
 import net.minecraft.world.attribute.EnvironmentAttributeProbe;
 import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -137,6 +143,11 @@ public final class PortalViewRenderer {
 	private static final double FRAME_OCCLUDER_MARGIN = 0.9;
 	/** Smallest half-size (NDC) of a narrowed culling rectangle; see {@link #narrowedToRect}. */
 	private static final float MIN_CULL_HALF_SIZE = 0.1F;
+
+	/** The portal the view being rendered is seen through, if any (see {@link #addRiddenVehicle}). */
+	private static PortalGeometry lookingThrough;
+	/** How near a portal the ridden vehicle must be to be drawn beyond it too (blocks). */
+	private static final double RIDDEN_VEHICLE_REACH = 2.0;
 
 	/** A live portal view rendered this frame, waiting to be composited. */
 	private record Pass(Link link, RemoteDimension view) {
@@ -303,7 +314,12 @@ public final class PortalViewRenderer {
 			PortalGeometry geometry = link.geometry();
 			Vec3 remoteEye = geometry.toDest(main.position());
 			remote.camera.place(main, remote.level, remoteEye, geometry.toDest(main.rotation()));
-			renderLevelInto(minecraft, main, remote, remoteEye, new Matrix4f(levelProjection));
+			lookingThrough = geometry;
+			try {
+				renderLevelInto(minecraft, main, remote, remoteEye, new Matrix4f(levelProjection));
+			} finally {
+				lookingThrough = null;
+			}
 			activeLink = link;
 			activeRemote = remote;
 			activeFullscreen = true;
@@ -606,7 +622,44 @@ public final class PortalViewRenderer {
 		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye, projectionCenter));
 		remote.camera.place(main, remote.level, remoteEye, orientation, narrowedToRect(levelProjection, rect));
 		remote.renderer.forceRecull();
-		renderLevelInto(minecraft, main, remote, remoteEye, projection);
+		lookingThrough = geometry;
+		try {
+			renderLevelInto(minecraft, main, remote, remoteEye, projection);
+		} finally {
+			lookingThrough = null;
+		}
+	}
+
+	/**
+	 * The vehicle the player rides, drawn on the far side too while it noses through the
+	 * portal: its front is past the plane, where the window covers it in the main view, and the
+	 * far side doesn't have it (yet). Moved through the portal it shows there, the view's clip
+	 * plane cutting off what's still on this side.
+	 */
+	private static void addRiddenVehicle(Minecraft minecraft, RemoteDimension remote, PortalGeometry geometry, float partialTicks) {
+		LocalPlayer player = minecraft.player;
+		if (player == null || !player.isPassenger()) {
+			return;
+		}
+		Entity vehicle = player.getRootVehicle();
+		if (!vehicle.getBoundingBox().inflate(RIDDEN_VEHICLE_REACH).intersects(PortalGeometry.box(geometry.sourceEnd()))) {
+			return;
+		}
+		EntityRenderState state = minecraft.getEntityRenderDispatcher().extractEntity(vehicle, partialTicks);
+		Vec3 pos = geometry.toDest(new Vec3(state.x, state.y, state.z));
+		state.x = pos.x;
+		state.y = pos.y;
+		state.z = pos.z;
+		state.leashStates = null;
+		float turn = geometry.toDestRotation(vehicle.getYRot(), 0.0F)[0] - vehicle.getYRot();
+		if (state instanceof LivingEntityRenderState living) {
+			living.bodyRot += turn;
+		} else if (state instanceof BoatRenderState boat) {
+			boat.yRot += turn;
+		} else if (state instanceof MinecartRenderState minecart) {
+			minecart.yRot += turn;
+		}
+		remote.renderState.entityRenderStates.add(state);
 	}
 
 	/**
@@ -640,6 +693,9 @@ public final class PortalViewRenderer {
 		cameraState.fogData = remote.fog.setupFog(
 				remote.camera, Math.min(minecraft.options.getEffectiveRenderDistance(), ClientConfig.get().effectiveRemoteRenderDistance()), delta, ClientVersioned.bossOverlayWorldDarkening(partialTicks), remote.level);
 		remote.renderer.extract(delta, remote.camera, partialTicks);
+		if (lookingThrough != null) {
+			addRiddenVehicle(minecraft, remote, lookingThrough, partialTicks);
+		}
 		// Extraction pointed the shared dispatchers at the remote camera; point them back.
 		minecraft.getEntityRenderDispatcher().prepare(main, minecraft.crosshairPickEntity);
 		minecraft.getBlockEntityRenderDispatcher().prepare(eye);

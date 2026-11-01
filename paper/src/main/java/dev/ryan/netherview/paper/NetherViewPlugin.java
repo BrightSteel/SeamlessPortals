@@ -11,11 +11,17 @@ import dev.ryan.netherview.server.PortalWands;
 import dev.ryan.netherview.server.ServerConfig;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.papermc.paper.event.entity.EntityInsideBlockEvent;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import org.bukkit.Material;
+import org.bukkit.block.Block;
+import org.bukkit.craftbukkit.entity.CraftEntity;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerPortalEvent;
@@ -80,6 +86,19 @@ public final class NetherViewPlugin extends JavaPlugin implements Listener {
 		if ((cause == PlayerTeleportEvent.TeleportCause.NETHER_PORTAL || cause == PlayerTeleportEvent.TeleportCause.END_PORTAL)
 				&& PortalViewServer.handlesTravel(((CraftPlayer) event.getPlayer()).getHandle())) {
 			event.setCancelled(true);
+		}
+	}
+
+	/** The same for a vehicle carrying such a player: vanilla would send it on touch, before its rider reaches the plane. */
+	@EventHandler(ignoreCancelled = true)
+	public void onVehicleInPortal(EntityInsideBlockEvent event) {
+		Material type = event.getBlock().getType();
+		if ((type == Material.NETHER_PORTAL || type == Material.END_PORTAL) && !(event.getEntity() instanceof Player)
+				&& !event.getEntity().getPassengers().isEmpty()) {
+			Block block = event.getBlock();
+			if (PortalViewServer.handlesTravel(((CraftEntity) event.getEntity()).getHandle(), new BlockPos(block.getX(), block.getY(), block.getZ()))) {
+				event.setCancelled(true);
+			}
 		}
 	}
 

@@ -5,6 +5,8 @@ import it.unimi.dsi.fastutil.ints.IntSet;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.world.entity.Entity;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -85,7 +87,39 @@ public final class DimensionHandoff {
 	private static boolean filledLevel;
 	/** Chunks the server itself has sent in the current level (not the ones a hand-off filled in). */
 	private static final LongSet serverChunks = new LongOpenHashSet();
+	/** The stand-in vehicle's entity id: negative, never one the server hands out. */
+	private static final int STAND_IN_ID = -0x4E56;
+	/** How long a stand-in vehicle waits for the server's (ticks). */
+	private static final int STAND_IN_TICKS = 40;
 	private static boolean filling;
+	/** The vehicle ridden through the portal, as the packets adding a copy of it where it comes out. */
+	private static List<Packet<ClientGamePacketListener>> carriedVehicle = List.of();
+	private static int carriedVehicleId = -1;
+	/** The vehicle the player rode when the server announced the trip, and where on it they sat (relative to it). */
+	private static Entity travelVehicle;
+	private static Vec3 travelSeat;
+	/**
+	 * That copy in the new level, ridden from the first frame there: the server moves the
+	 * player first and adds their vehicle (same UUID, new id) a moment later, and in between the
+	 * player would stand in the air and the mount vanish.
+	 */
+	private static Entity standIn;
+	private static int standInTicks;
+	/**
+	 * Until then (ms) after riding through, the vehicle may still blink out: the server stops
+	 * showing an entity while the chunk it's in waits to be sent, unseating the player and
+	 * removing it, then adds it back. A stand-in carries the player over that (see
+	 * {@link #beforePassengers}).
+	 */
+	private static long vehicleGuardUntil;
+	private static final long VEHICLE_GUARD_MS = 3000L;
+	/** The vehicle the server just unseated the player from in that window, and where on it they sat. */
+	private static Entity unseatedFrom;
+	private static Vec3 unseatedSeat;
+	private static boolean remountAfterRemoval;
+	/** The server's vehicle that replaced the stand-in, picking up its pose (see {@link #afterServerEntity}). */
+	private static int standInReplacedBy = -1;
+	private static Entity standInPose;
 	/** A hand-off's chunks not filled in yet, nearest first, and the view to copy them from; see {@link #tick}. */
 	private static final List<ChunkPos> deferredFill = new ArrayList<>();
 	private static RemoteDimension fillSource;
@@ -127,6 +161,10 @@ public final class DimensionHandoff {
 	/** The server is about to move the player through this portal pair (see {@link PortalTravelPayload}). */
 	public static void onTravel(PortalTravelPayload payload) {
 		travel = payload.link();
+		// Note the vehicle now: moving it, the server unseats the player before the respawn.
+		LocalPlayer player = Minecraft.getInstance().player;
+		travelVehicle = player == null || !player.isPassenger() ? null : player.getRootVehicle();
+		travelSeat = travelVehicle == null ? null : player.position().subtract(travelVehicle.position());
 	}
 
 	/** Respawn, on the main thread, before the old level is replaced. */
@@ -135,6 +173,18 @@ public final class DimensionHandoff {
 		serverChunks.clear();
 		PortalLink announced = travel;
 		travel = null;
+		Entity rodeThrough = travelVehicle;
+		travelVehicle = null;
+		LocalPlayer leaving = Minecraft.getInstance().player;
+		if (rodeThrough != null && leaving != null && !leaving.isPassenger()) {
+			// Unseating the player, vanilla set them down beside the vehicle: back in the saddle,
+			// which is where they come out (on the stand-in, see mountStandIn).
+			// The client steers the vehicle and may have moved it on since the announcement.
+			leaving.setPos(rodeThrough.position().add(travelSeat));
+			leaving.xo = rodeThrough.xo + travelSeat.x;
+			leaving.yo = rodeThrough.yo + travelSeat.y;
+			leaving.zo = rodeThrough.zo + travelSeat.z;
+		}
 		Minecraft minecraft = Minecraft.getInstance();
 		pendingChunks = List.of();
 		pendingCenter = null;
@@ -149,6 +199,8 @@ public final class DimensionHandoff {
 		wayBack = null;
 		wayBackChunks = List.of();
 		wayBackEntities = List.of();
+		carriedVehicle = List.of();
+		carriedVehicleId = -1;
 		// On a server without the server half, a vanilla trip through a portal this client has
 		// been through before: where it lands is recorded, and remembered (see OfflinePortals).
 		boolean recordedTrip = false;
@@ -190,6 +242,14 @@ public final class DimensionHandoff {
 		float[] rotation = geometry.toDestRotation(minecraft.player.getYRot(), minecraft.player.getXRot());
 		arrivalYRot = rotation[0];
 		arrivalXRot = rotation[1];
+		Entity vehicle = rodeThrough;
+		if (vehicle != null) {
+			float[] turned = geometry.toDestRotation(vehicle.getYRot(), vehicle.getXRot());
+			// Not the vehicle's own id: the server's removals for the level just left still name it.
+			carriedVehicle = RemoteDimension.entityPackets(vehicle, STAND_IN_ID, geometry.toDest(vehicle.position()), turned[1], turned[0],
+					vehicle.getYHeadRot() + (turned[0] - vehicle.getYRot()), geometry.rotate(vehicle.getDeltaMovement()));
+			carriedVehicleId = STAND_IN_ID;
+		}
 
 		PortalLink link = used.link();
 		if (link.dest().fill() == PortalFill.NONE) {
@@ -298,6 +358,7 @@ public final class DimensionHandoff {
 		}
 		carryOver(previousPlayer, Minecraft.getInstance().player);
 		previousPlayer = null;
+		mountStandIn(listener, level);
 		// The main camera's environment probe (fog, sky and light colours) still holds the old
 		// dimension and blends from it over the next tick; start it fresh in the new one.
 		Minecraft minecraft = Minecraft.getInstance();
@@ -432,6 +493,9 @@ public final class DimensionHandoff {
 	 * a visible flicker. Returns whether the packet is handled.
 	 */
 	public static boolean onServerEntity(ClientboundAddEntityPacket packet, ClientLevel level) {
+		if (!filling) {
+			replaceStandIn(packet, level);
+		}
 		IntSet seeded = seededEntities.get(level);
 		if (filling || seeded == null || !seeded.remove(packet.getId())) {
 			return false;
@@ -444,6 +508,135 @@ public final class DimensionHandoff {
 		entity.lerpHeadTo(packet.getYHeadRot(), 3);
 		entity.setDeltaMovement(packet.getMovement());
 		return true;
+	}
+
+	/** Ride a copy of the vehicle just ridden through the portal until the server's own arrives. */
+	private static void mountStandIn(ClientPacketListener listener, ClientLevel level) {
+		List<Packet<ClientGamePacketListener>> packets = carriedVehicle;
+		int id = carriedVehicleId;
+		carriedVehicle = List.of();
+		carriedVehicleId = -1;
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (packets.isEmpty() || player == null) {
+			return;
+		}
+		filling = true;
+		try {
+			for (Packet<ClientGamePacketListener> packet : packets) {
+				packet.handle(listener);
+			}
+		} catch (RuntimeException ignored) {
+			// no stand-in then: the server's vehicle arrives a moment later
+		} finally {
+			filling = false;
+		}
+		Entity vehicle = level.getEntity(id);
+		if (vehicle != null && player.startRiding(vehicle, true, false)) {
+			standIn = vehicle;
+			standInTicks = 0;
+			vehicleGuardUntil = Util.getMillis() + VEHICLE_GUARD_MS;
+		} else if (vehicle != null) {
+			level.removeEntity(id, Entity.RemovalReason.DISCARDED);
+		}
+	}
+
+	/** The server's copy of the vehicle a stand-in is ridden in place of is being added: the stand-in makes way (one UUID per level). */
+	private static void replaceStandIn(ClientboundAddEntityPacket packet, ClientLevel level) {
+		if (standIn == null || standIn.level() != level || !standIn.getUUID().equals(packet.getUUID())) {
+			return;
+		}
+		standInPose = standIn;
+		standInReplacedBy = packet.getId();
+		level.removeEntity(standIn.getId(), Entity.RemovalReason.DISCARDED);
+		standIn = null;
+	}
+
+	/**
+	 * After vanilla added an entity: if it replaced a stand-in, it takes over where the stand-in
+	 * has got to (the client has been steering it there), and the player rides it right away.
+	 */
+	public static void afterServerEntity(ClientboundAddEntityPacket packet, ClientLevel level) {
+		Entity pose = standInPose;
+		if (pose == null || packet.getId() != standInReplacedBy) {
+			return;
+		}
+		standInPose = null;
+		standInReplacedBy = -1;
+		Entity vehicle = level.getEntity(packet.getId());
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (vehicle == null || player == null) {
+			return;
+		}
+		vehicle.snapTo(pose.position(), pose.getYRot(), pose.getXRot());
+		vehicle.xo = pose.xo;
+		vehicle.yo = pose.yo;
+		vehicle.zo = pose.zo;
+		vehicle.yRotO = pose.yRotO;
+		vehicle.xRotO = pose.xRotO;
+		vehicle.setYHeadRot(pose.getYHeadRot());
+		vehicle.setDeltaMovement(pose.getDeltaMovement());
+		player.startRiding(vehicle, true, false);
+		vehicleGuardUntil = Util.getMillis() + VEHICLE_GUARD_MS;
+	}
+
+	/** Whether the server's vehicle hiccups after riding through are still smoothed over (see {@link #vehicleGuardUntil}). */
+	private static boolean guardingVehicle(LocalPlayer player) {
+		return player != null && player.getVehicle() != null && Util.getMillis() <= vehicleGuardUntil && !player.isShiftKeyDown();
+	}
+
+	/** Before the server sets a vehicle's passengers: if that unseats the player from what they rode through on, they'll be put back. */
+	public static void beforePassengers(ClientboundSetPassengersPacket packet) {
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (!guardingVehicle(player) || player.getVehicle().getId() != packet.getVehicle()) {
+			return;
+		}
+		for (int passenger : packet.getPassengers()) {
+			if (passenger == player.getId()) {
+				return;
+			}
+		}
+		unseatedFrom = player.getVehicle();
+		unseatedSeat = player.position().subtract(unseatedFrom.position());
+	}
+
+	/** After the server set a vehicle's passengers: back on the vehicle the player was just unseated from. */
+	public static void afterPassengers() {
+		Entity vehicle = unseatedFrom;
+		unseatedFrom = null;
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (vehicle == null || player == null || vehicle.isRemoved() || player.getVehicle() != null) {
+			return;
+		}
+		if (player.startRiding(vehicle, true, false)) {
+			player.setPos(vehicle.position().add(unseatedSeat));
+		}
+	}
+
+	/** Before the server removes entities: if one is the vehicle the player rides, a stand-in takes its place until it's back. */
+	public static void beforeRemoveEntities(ClientboundRemoveEntitiesPacket packet) {
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (!guardingVehicle(player) || !ClientVersioned.removedEntityIds(packet).contains(player.getVehicle().getId())) {
+			return;
+		}
+		Entity vehicle = player.getVehicle();
+		carriedVehicle = RemoteDimension.entityPackets(vehicle, STAND_IN_ID, vehicle.position(), vehicle.getXRot(), vehicle.getYRot(),
+				vehicle.getYHeadRot(), vehicle.getDeltaMovement());
+		carriedVehicleId = STAND_IN_ID;
+		unseatedSeat = player.position().subtract(vehicle.position());
+		remountAfterRemoval = true;
+	}
+
+	/** After the server removed entities: back in the saddle, of the stand-in, where the player sat. */
+	public static void afterRemoveEntities(ClientPacketListener listener, ClientLevel level) {
+		if (!remountAfterRemoval) {
+			return;
+		}
+		remountAfterRemoval = false;
+		mountStandIn(listener, level);
+		LocalPlayer player = Minecraft.getInstance().player;
+		if (standIn != null && player != null && player.getVehicle() == standIn) {
+			player.setPos(standIn.position().add(unseatedSeat));
+		}
 	}
 
 	/** Fill one chunk of a hand-off into the player's level, remembering its data for {@link #onServerChunk}. */
@@ -475,6 +668,19 @@ public final class DimensionHandoff {
 			} finally {
 				filling = false;
 			}
+		}
+		if (standIn != null && !standIn.isRemoved() && !standIn.isLocalInstanceAuthoritative()) {
+			// The client never moves a vehicle the server drives (a minecart): keep the stand-in
+			// rolling as it came in until the server's own takes over.
+			standIn.setOldPosAndRot();
+			standIn.setPos(standIn.position().add(standIn.getDeltaMovement()));
+		}
+		if (standIn != null && (standIn.isRemoved() || ++standInTicks > STAND_IN_TICKS)) {
+			// The server never sent the vehicle (it didn't come through after all).
+			if (standIn.level() instanceof ClientLevel standInLevel) {
+				standInLevel.removeEntity(standIn.getId(), Entity.RemovalReason.DISCARDED);
+			}
+			standIn = null;
 		}
 		if (!seededEntities.isEmpty() && Util.getMillis() > seededEntitiesUntil) {
 			seededEntities.forEach((level, ids) -> ids.forEach(id -> level.removeEntity(id, Entity.RemovalReason.DISCARDED)));

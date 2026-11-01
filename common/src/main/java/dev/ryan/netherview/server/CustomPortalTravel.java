@@ -120,18 +120,14 @@ final class CustomPortalTravel {
 				destPos = destPos.add(geometry.destNormal().scale(CONTACT_EXIT_CLEARANCE - ahead));
 			}
 		}
-		Vec3 velocity = geometry.rotate(entity.getDeltaMovement());
-		float[] rotation = geometry.toDestRotation(entity.getYRot(), entity.getXRot());
-		if (entity instanceof ServerPlayer player) {
-			PortalViewServer.announceTravel(player, link);
-		}
 		COOLDOWN.put(entity.getUUID(), COOLDOWN_TICKS);
 		LAST.values().forEach(points -> points.remove(entity.getUUID()));
-		Entity moved = entity.teleport(new TeleportTransition(dest, destPos, velocity, rotation[0], rotation[1],
-				entity instanceof ServerPlayer ? TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET) : TeleportTransition.PLACE_PORTAL_TICKET));
+		boolean withPlayer = !TravelCompanions.riders(entity).isEmpty();
+		Entity moved = TravelCompanions.travel(dest, entity, link, geometry, destPos,
+				withPlayer ? TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET) : TeleportTransition.PLACE_PORTAL_TICKET);
 		if (moved != null) {
-			moved.setPortalCooldown();
 			moved.clearFire();
+			COOLDOWN.put(moved.getUUID(), COOLDOWN_TICKS);
 		}
 	}
 }

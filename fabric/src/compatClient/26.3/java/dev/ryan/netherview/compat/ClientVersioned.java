@@ -9,6 +9,7 @@ import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.textures.GpuSampler;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.blaze3d.systems.RenderSystem;
+import it.unimi.dsi.fastutil.ints.IntList;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.multiplayer.ClientChunkCache;
@@ -20,6 +21,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData;
+import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.world.attribute.EnvironmentAttributeProbe;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.attribute.EnvironmentAttributes;
@@ -97,6 +99,10 @@ public final class ClientVersioned {
 
 	public static void setScreen(Minecraft minecraft, Screen screen) {
 		minecraft.gui.setScreen(screen);
+	}
+
+	public static IntList removedEntityIds(ClientboundRemoveEntitiesPacket packet) {
+		return packet.entityIds();
 	}
 
 	/** An offscreen colour + depth target. */

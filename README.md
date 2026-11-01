@@ -2,7 +2,9 @@
 
 See-through portals for Minecraft Java 26.1.2, 26.2 and 26.3. Nether portals, End portals and
 admin-made custom portals show the world on the other side, live, and you cross them by just
-walking through: no swirl, no loading screen, no stopping.
+walking through: no swirl, no loading screen, no stopping. The same goes for riding through (a
+horse, boat, minecart, pig or anything else you sit on, with everyone on it), flying through with
+an elytra, and animals on your lead come along with you.
 
 The project ships two things:
 

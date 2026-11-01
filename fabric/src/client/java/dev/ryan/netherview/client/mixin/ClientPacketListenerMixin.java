@@ -10,7 +10,9 @@ import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket;
 import net.minecraft.client.multiplayer.ClientLevel;
 import dev.ryan.netherview.client.RemoteClocks;
@@ -90,6 +92,35 @@ public abstract class ClientPacketListenerMixin {
 		if (DimensionHandoff.onServerEntity(packet, ((ClientPacketListenerAccessor) this).netherview$getLevel())) {
 			ci.cancel();
 		}
+	}
+
+	@Inject(
+			method = "handleSetEntityPassengersPacket",
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V", shift = At.Shift.AFTER))
+	private void netherview$beforePassengers(ClientboundSetPassengersPacket packet, CallbackInfo ci) {
+		DimensionHandoff.beforePassengers(packet);
+	}
+
+	@Inject(method = "handleSetEntityPassengersPacket", at = @At("TAIL"))
+	private void netherview$afterPassengers(ClientboundSetPassengersPacket packet, CallbackInfo ci) {
+		DimensionHandoff.afterPassengers();
+	}
+
+	@Inject(
+			method = "handleRemoveEntities",
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/PacketProcessor;)V", shift = At.Shift.AFTER))
+	private void netherview$beforeRemoveEntities(ClientboundRemoveEntitiesPacket packet, CallbackInfo ci) {
+		DimensionHandoff.beforeRemoveEntities(packet);
+	}
+
+	@Inject(method = "handleRemoveEntities", at = @At("TAIL"))
+	private void netherview$afterRemoveEntities(ClientboundRemoveEntitiesPacket packet, CallbackInfo ci) {
+		DimensionHandoff.afterRemoveEntities((ClientPacketListener) (Object) this, ((ClientPacketListenerAccessor) this).netherview$getLevel());
+	}
+
+	@Inject(method = "handleAddEntity", at = @At("TAIL"))
+	private void netherview$afterServerEntity(ClientboundAddEntityPacket packet, CallbackInfo ci) {
+		DimensionHandoff.afterServerEntity(packet, ((ClientPacketListenerAccessor) this).netherview$getLevel());
 	}
 
 	@Inject(method = "handleSetTime", at = @At("TAIL"))

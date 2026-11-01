@@ -22,6 +22,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.util.BlockUtil;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ai.village.poi.PoiManager;
 import net.minecraft.world.entity.ai.village.poi.PoiRecord;
 import net.minecraft.world.entity.ai.village.poi.PoiTypes;
@@ -80,6 +81,13 @@ public final class PortalViewServer {
 	private static final int VIRTUAL_DEST_CACHE_TICKS = 200;
 	/** Largest eye movement in one tick still treated as walking (or flying) rather than a teleport. */
 	private static final double MAX_STEP = 4.0;
+	/**
+	 * How far behind the server a client sees a vehicle the server drives (ticks): minecarts
+	 * send their position every few ticks and the client eases between them. Half the ping
+	 * comes on top.
+	 */
+	private static final int FOLLOW_TICKS = 4;
+	private static final int MAX_FOLLOW_TICKS = 20;
 	/** Where vanilla stands a player arriving in the End: on the platform it builds at END_SPAWN_POINT. */
 	private static final Vec3 END_ARRIVAL = Vec3.atBottomCenterOf(ServerLevel.END_SPAWN_POINT).subtract(0.0, 1.0, 0.0);
 	/**
@@ -206,6 +214,23 @@ public final class PortalViewServer {
 		return false;
 	}
 
+	/**
+	 * Whether {@code entity}'s travel through the portal block at {@code pos} is handled here: a
+	 * player's who sees through it, or a vehicle's carrying one (vanilla would send a vehicle on
+	 * touch, before its rider reaches the plane).
+	 */
+	public static boolean handlesTravel(Entity entity, BlockPos pos) {
+		if (entity instanceof ServerPlayer player) {
+			return handlesTravel(player, pos);
+		}
+		for (Entity passenger : entity.getIndirectPassengers()) {
+			if (passenger instanceof ServerPlayer player && handlesTravel(player, pos)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Whether the player is touching any portal whose travel is handled here (for platforms without a per-block hook). */
 	public static boolean handlesTravel(ServerPlayer player) {
 		for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(player.getBoundingBox().getMinPosition()), BlockPos.containing(player.getBoundingBox().getMaxPosition()))) {
@@ -238,17 +263,31 @@ public final class PortalViewServer {
 			return false;
 		}
 		ServerLevel level = player.level();
+		// Riding, the vehicle goes through with the player on it: what falls into an end portal is its feet.
+		Entity root = player.getRootVehicle();
 		Vec3 eye = player.getEyePosition();
-		Vec3 feet = player.position();
+		Vec3 feet = root.position();
 		Vec3 lastEye = state.lastEye;
 		Vec3 lastFeet = state.lastFeet;
 		boolean sameLevel = state.lastDimension == level.dimension();
 		state.lastEye = eye;
 		state.lastFeet = feet;
 		state.lastDimension = level.dimension();
+		PortalLink waiting = state.waitingCrossing;
+		if (waiting != null) {
+			// A crossing the client is still catching up with (see below): go once it has, if the
+			// vehicle hasn't backed out of the portal meanwhile.
+			if (!sameLevel || root == player || --state.waitingTicks > 0) {
+				state.waitingCrossing = sameLevel && root != player ? waiting : null;
+				return false;
+			}
+			state.waitingCrossing = null;
+			PortalGeometry geometry = PortalGeometry.of(waiting);
+			return side(geometry, geometry.horizontal() ? feet : eye) * state.waitingSide > 0 && travel(server, player, level, root, waiting, geometry);
+		}
 		// A jump of more than a few blocks in one tick is a teleport or respawn, not a step
 		// through a portal (the straight line between the two spots could cross one).
-		if (lastEye == null || !sameLevel || state.links.isEmpty() || player.isPassenger() || player.isSleeping()
+		if (lastEye == null || !sameLevel || state.links.isEmpty() || player.isSleeping()
 				|| lastEye.distanceToSqr(eye) > MAX_STEP * MAX_STEP) {
 			return false;
 		}
@@ -258,30 +297,42 @@ public final class PortalViewServer {
 			if (!crossed || !seamless(level, link) || CustomPortals.at(level, link.min()) != null) {
 				continue; // custom portals are travelled by CustomPortalTravel, for everyone
 			}
-			ServerLevel dest = server.getLevel(ResourceKey.create(Registries.DIMENSION, Identifier.parse(link.destDimension())));
-			if (dest == null) {
+			if (root != player && root.getControllingPassenger() != player) {
+				// A vehicle the server drives (a minecart): the client only follows its moves, a
+				// few ticks behind, and would see itself set down short of the far portal.
+				state.waitingCrossing = link;
+				state.waitingTicks = Math.min(MAX_FOLLOW_TICKS, FOLLOW_TICKS + player.connection.latency() / 100);
+				state.waitingSide = Math.signum(side(geometry, geometry.horizontal() ? feet : eye));
 				return false;
 			}
-			PortalLink target = geometry.horizontal() ? enterEnd(dest, link) : vanillaNetherDestination(level, dest, link, player);
-			if (target == null) {
-				return false;
-			}
-			geometry = PortalGeometry.of(target);
-			Vec3 destFeet = geometry.toDest(feet);
-			Vec3 velocity = geometry.rotate(player.getDeltaMovement());
-			float[] rotation = geometry.toDestRotation(player.getYRot(), player.getXRot());
-			state.lastEye = null;
-			// These links belong to the dimension being left; the next scan sends the new ones.
-			state.links = List.of();
-			sender.send(player, new PortalTravelPayload(target), PortalTravelPayload.STREAM_CODEC);
-			player.teleport(new TeleportTransition(dest, destFeet, velocity, rotation[0], rotation[1],
-					TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET)));
-			// Arriving just past the destination plane may still overlap its portal blocks; the
-			// cooldown keeps vanilla from sending the player straight back.
-			player.setPortalCooldown();
-			return true;
+			return travel(server, player, level, root, link, geometry);
 		}
 		return false;
+	}
+
+	/** Which side of a portal's plane {@code point} is on (signed distance from it). */
+	private static double side(PortalGeometry geometry, Vec3 point) {
+		return point.subtract(geometry.sourceCenter()).dot(geometry.sourceNormal());
+	}
+
+	/**
+	 * Move the player (or the vehicle they ride, with everyone on it, and whatever they lead)
+	 * through {@code link}. Each modded rider is told the pair first, and their links, which
+	 * belong to the dimension being left, dropped; the next scan sends the new ones.
+	 */
+	private static boolean travel(MinecraftServer server, ServerPlayer player, ServerLevel level, Entity root, PortalLink link, PortalGeometry geometry) {
+		ServerLevel dest = server.getLevel(ResourceKey.create(Registries.DIMENSION, Identifier.parse(link.destDimension())));
+		if (dest == null) {
+			return false;
+		}
+		PortalLink target = geometry.horizontal() ? enterEnd(dest, link) : vanillaNetherDestination(level, dest, link, player);
+		if (target == null) {
+			return false;
+		}
+		PortalGeometry through = PortalGeometry.of(target);
+		TravelCompanions.travel(dest, root, target, through, through.toDest(root.position()),
+				TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET));
+		return true;
 	}
 
 	/**
@@ -701,6 +752,10 @@ public final class PortalViewServer {
 		final Map<String, RemoteEntityTracker> entities = new HashMap<>();
 		Vec3 lastEye;
 		Vec3 lastFeet;
+		/** A crossing on a vehicle the server drives, made once the client has seen it (ticks to go, and which side is through). */
+		PortalLink waitingCrossing;
+		int waitingTicks;
+		double waitingSide;
 		ResourceKey<Level> lastDimension;
 		/** The player's dimension when remote data was last streamed. */
 		ResourceKey<Level> streamedFrom;

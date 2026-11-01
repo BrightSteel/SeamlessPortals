@@ -172,25 +172,32 @@ public final class RemoteDimension implements AutoCloseable {
 			if (center != null && Math.max(Math.abs(entity.chunkPosition().x() - center.x()), Math.abs(entity.chunkPosition().z() - center.z())) > radius) {
 				continue;
 			}
-			int data = entity instanceof FallingBlockEntity falling ? Block.getId(falling.getBlockState())
-					: entity instanceof HangingEntity hanging ? hanging.getDirection().get3DDataValue() : 0;
-			packets.add(new ClientboundAddEntityPacket(entity.getId(), entity.getUUID(), entity.getX(), entity.getY(), entity.getZ(),
-					entity.getXRot(), entity.getYRot(), entity.getType(), data, entity.getDeltaMovement(), entity.getYHeadRot()));
-			List<SynchedEntityData.DataValue<?>> values = entity.getEntityData().getNonDefaultValues();
-			if (values != null) {
-				packets.add(new ClientboundSetEntityDataPacket(entity.getId(), values));
+			packets.addAll(entityPackets(entity, entity.getId(), entity.position(), entity.getXRot(), entity.getYRot(), entity.getYHeadRot(), entity.getDeltaMovement()));
+		}
+		return packets;
+	}
+
+	/** The packets that would add a copy of {@code entity} (its data and equipment) as entity {@code id} at {@code pos}, turned and moving as given. */
+	static List<Packet<ClientGamePacketListener>> entityPackets(Entity entity, int id, Vec3 pos, float xRot, float yRot, float yHeadRot, Vec3 velocity) {
+		List<Packet<ClientGamePacketListener>> packets = new ArrayList<>();
+		int data = entity instanceof FallingBlockEntity falling ? Block.getId(falling.getBlockState())
+				: entity instanceof HangingEntity hanging ? hanging.getDirection().get3DDataValue() : 0;
+		packets.add(new ClientboundAddEntityPacket(id, entity.getUUID(), pos.x, pos.y, pos.z,
+				xRot, yRot, entity.getType(), data, velocity, yHeadRot));
+		List<SynchedEntityData.DataValue<?>> values = entity.getEntityData().getNonDefaultValues();
+		if (values != null) {
+			packets.add(new ClientboundSetEntityDataPacket(id, values));
+		}
+		if (entity instanceof LivingEntity living) {
+			List<Pair<EquipmentSlot, ItemStack>> equipment = new ArrayList<>();
+			for (EquipmentSlot slot : EquipmentSlot.values()) {
+				ItemStack item = living.getItemBySlot(slot);
+				if (!item.isEmpty()) {
+					equipment.add(Pair.of(slot, item.copy()));
+				}
 			}
-			if (entity instanceof LivingEntity living) {
-				List<Pair<EquipmentSlot, ItemStack>> equipment = new ArrayList<>();
-				for (EquipmentSlot slot : EquipmentSlot.values()) {
-					ItemStack item = living.getItemBySlot(slot);
-					if (!item.isEmpty()) {
-						equipment.add(Pair.of(slot, item.copy()));
-					}
-				}
-				if (!equipment.isEmpty()) {
-					packets.add(new ClientboundSetEquipmentPacket(entity.getId(), equipment));
-				}
+			if (!equipment.isEmpty()) {
+				packets.add(new ClientboundSetEquipmentPacket(id, equipment));
 			}
 		}
 		return packets;

@@ -5,7 +5,6 @@ import dev.ryan.netherview.server.PortalViewServer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.InsideBlockEffectApplier;
@@ -22,11 +21,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(NetherPortalBlock.class)
 public abstract class NetherPortalBlockMixin {
-	/** Players who see through this portal travel when they cross its plane (see PortalViewServer), not on contact.
+	/** Players who see through this portal (and what they ride) travel when they cross its plane (see PortalViewServer), not on contact.
 	 * Custom portals move things themselves (CustomPortalTravel), so the fill block never acts. */
 	@Inject(method = "entityInside", at = @At("HEAD"), cancellable = true)
 	private void netherview$crossInsteadOfTouch(BlockState state, Level level, BlockPos pos, Entity entity, InsideBlockEffectApplier effectApplier, boolean isPrecise, CallbackInfo ci) {
-		if (entity instanceof ServerPlayer player && PortalViewServer.handlesTravel(player, pos) || CustomPortals.at(level, pos) != null) {
+		if (PortalViewServer.handlesTravel(entity, pos) || CustomPortals.at(level, pos) != null) {
 			ci.cancel();
 		}
 	}
