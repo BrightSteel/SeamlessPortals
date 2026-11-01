@@ -22,7 +22,6 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.UpdateInterval;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -151,13 +150,22 @@ final class RemoteEntityTracker {
 					}
 				}
 			}
+			Object interval = updateIntervalNever(serverEntityConstructor.getParameterTypes()[2]);
 			Object[] args = serverEntityConstructor.getParameterCount() == 5
-					? new Object[] {level, entity, UpdateInterval.NEVER, false, NO_BROADCAST}
-					: new Object[] {level, entity, UpdateInterval.NEVER, false, NO_BROADCAST, new HashSet<>()};
+					? new Object[] {level, entity, interval, false, NO_BROADCAST}
+					: new Object[] {level, entity, interval, false, NO_BROADCAST, new HashSet<>()};
 			return (ServerEntity) serverEntityConstructor.newInstance(args);
 		} catch (ReflectiveOperationException e) {
 			throw new IllegalStateException("No usable ServerEntity constructor", e);
 		}
+	}
+
+	/**
+	 * "Never send periodic updates" for the constructor's interval parameter: an
+	 * {@code UpdateInterval} from 26.3, a tick count before (where the largest never comes round).
+	 */
+	private static Object updateIntervalNever(Class<?> type) throws ReflectiveOperationException {
+		return type == int.class ? Integer.MAX_VALUE : type.getField("NEVER").get(null);
 	}
 
 	private static StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> boundCodec;

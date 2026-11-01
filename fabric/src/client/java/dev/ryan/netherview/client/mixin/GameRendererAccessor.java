@@ -1,6 +1,5 @@
 package dev.ryan.netherview.client.mixin;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.GlobalSettingsUniform;
 import net.minecraft.client.renderer.Lightmap;
@@ -10,14 +9,11 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 
 /**
  * The remote-dimension pass reuses the game renderer, so for its duration the
- * render target and lightmap it hands to {@code LevelRenderer} are swapped out.
+ * lightmap it hands to {@code LevelRenderer} is swapped out (and the render target, through
+ * {@code MainRenderTargetAccessor}).
  */
 @Mixin(GameRenderer.class)
 public interface GameRendererAccessor {
-	@Mutable
-	@Accessor("mainRenderTarget")
-	void netherview$setMainRenderTarget(RenderTarget target);
-
 	@Accessor("lightmap")
 	Lightmap netherview$getLightmap();
 

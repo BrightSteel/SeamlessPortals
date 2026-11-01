@@ -1,5 +1,6 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.net.PortalEnd;
 import dev.ryan.netherview.net.PortalFill;
 import net.minecraft.client.Minecraft;
@@ -94,7 +95,7 @@ public final class PortalHiding {
 			return;
 		}
 		for (BlockPos pos : changed(previous, next)) {
-			minecraft.levelExtractor.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+			ClientVersioned.markMainBlockDirty(pos);
 		}
 	}
 

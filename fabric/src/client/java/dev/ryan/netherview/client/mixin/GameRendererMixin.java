@@ -1,13 +1,14 @@
 package dev.ryan.netherview.client.mixin;
 
-import com.llamalad7.mixinextras.sugar.Local;
-import dev.ryan.netherview.client.DimensionHandoff;
+import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.client.PortalViewRenderer;
 import net.minecraft.client.renderer.GameRenderer;
 import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(GameRenderer.class)
@@ -19,20 +20,29 @@ public abstract class GameRendererMixin {
 	 */
 	@Inject(
 			method = "renderLevel",
-			at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/RenderSystem;setProjectionMatrix(Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lcom/mojang/blaze3d/ProjectionType;)V", shift = At.Shift.AFTER))
-	private void netherview$renderRemoteView(CallbackInfo ci, @Local(ordinal = 0) Matrix4f projectionMatrix) {
-		PortalViewRenderer.renderRemoteView(projectionMatrix);
+			at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/RenderSystem;setProjectionMatrix(Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lcom/mojang/blaze3d/ProjectionType;)V", ordinal = 0, shift = At.Shift.AFTER))
+	private void netherview$renderRemoteView(CallbackInfo ci) {
+		PortalViewRenderer.renderRemoteView(this.netherview$projectionMatrix);
 	}
 
-	@Inject(method = "extractOptions", at = @At("TAIL"))
-	private void netherview$noFadeAfterHandoff(CallbackInfo ci) {
-		if (DimensionHandoff.suppressChunkFade()) {
-			((GameRenderer) (Object) this).gameRenderState().optionsRenderState.chunkSectionFadeInTime = 0.0;
-		}
+	@Unique
+	private Matrix4f netherview$projectionMatrix;
+
+	/**
+	 * The level's projection matrix, as it's turned into the projection buffer just before the
+	 * call above. (Taken here rather than as a local: without a local variable table the
+	 * matrix's place among the method's locals differs between versions.)
+	 */
+	@ModifyArg(
+			method = "renderLevel",
+			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;"))
+	private Matrix4f netherview$captureProjection(Matrix4f projectionMatrix) {
+		this.netherview$projectionMatrix = projectionMatrix;
+		return projectionMatrix;
 	}
 
 	/** Draw the portal window after the level, before the hand and screen effects. */
-	@Inject(method = "renderLevel", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render3dHud(Lnet/minecraft/client/renderer/state/level/CameraRenderState;Lnet/minecraft/client/renderer/state/level/PlayerRenderState;Lnet/minecraft/client/renderer/state/OptionsRenderState;Z)V"))
+	@Inject(method = "renderLevel", at = @At(value = "INVOKE", target = ClientVersioned.AFTER_LEVEL_RENDER))
 	private void netherview$compositePortals(CallbackInfo ci) {
 		PortalViewRenderer.composite();
 	}

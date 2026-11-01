@@ -3,8 +3,10 @@ plugins {
 	id 'io.papermc.paperweight.userdev' version '2.0.0-beta.21'
 }
 
+apply from: rootProject.file('gradle/versions.gradle')
+
 base {
-	archivesName = 'netherview-paper'
+	archivesName = "netherview-paper-mc${mcProps.minecraft_version}"
 }
 
 repositories {
@@ -16,7 +18,7 @@ repositories {
 }
 
 dependencies {
-	paperweight.paperDevBundle('26.3.build.+')
+	paperweight.paperDevBundle(mcProps.paper_dev_bundle)
 }
 
 // Server half (portal discovery, chunk/entity streaming, travel) shared with the Fabric mod.

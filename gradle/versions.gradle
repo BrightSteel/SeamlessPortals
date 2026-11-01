@@ -1,0 +1,9 @@
+// Loads versions/<mc>.properties (-Pmc=26.1.2; default from gradle.properties) into ext.mcProps.
+def mc = project.property('mc')
+def file = rootProject.file("versions/${mc}.properties")
+if (!file.exists()) {
+	throw new GradleException("No versions/${mc}.properties; supported: " + rootProject.file('versions').list().findAll { it.endsWith('.properties') }.collect { it - '.properties' }.sort().join(', '))
+}
+def props = new Properties()
+file.withInputStream { props.load(it) }
+ext.mcProps = props

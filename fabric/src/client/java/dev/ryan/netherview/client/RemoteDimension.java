@@ -1,5 +1,7 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.compat.ClientVersioned;
+import dev.ryan.netherview.compat.RemoteLevelRenderer;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import dev.ryan.netherview.client.mixin.CloudRendererInvoker;
 import dev.ryan.netherview.client.mixin.LevelRendererAccessor;
@@ -10,7 +12,6 @@ import com.mojang.blaze3d.resource.CrossFrameResourcePool;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.Lightmap;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
-import net.minecraft.client.renderer.extract.LevelExtractor;
 import net.minecraft.client.renderer.fog.FogRenderer;
 import net.minecraft.client.renderer.state.LightmapRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
@@ -33,7 +34,6 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.util.profiling.Profiler;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.phys.Vec3;
-import com.mojang.renderpearl.api.GpuFormat;
 
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -54,8 +54,7 @@ public final class RemoteDimension implements AutoCloseable {
 	final ResourceKey<Level> key;
 	final ClientLevel level;
 	final LevelRenderState renderState = new LevelRenderState();
-	final LevelRenderer renderer;
-	final LevelExtractor extractor;
+	final RemoteLevelRenderer renderer;
 	final FogRenderer fog = new FogRenderer();
 	final Lightmap lightmap = new Lightmap();
 	final LightmapRenderState lightmapState = new LightmapRenderState();
@@ -71,20 +70,9 @@ public final class RemoteDimension implements AutoCloseable {
 		this.key = key;
 		int width = minecraft.getWindow().getWidth();
 		int height = minecraft.getWindow().getHeight();
-		this.renderer = new LevelRenderer(
-				minecraft.getEntityRenderDispatcher(),
-				minecraft.getBlockEntityRenderDispatcher(),
-				minecraft.getModelManager(),
-				minecraft.getTextureManager(),
-				minecraft.getAtlasManager(),
-				minecraft.getShaderManager(),
-				minecraft.gameRenderer,
-				width,
-				height);
-		((LevelRendererAccessor) this.renderer).netherview$setLevelRenderState(this.renderState);
-		CloudRendererInvoker clouds = (CloudRendererInvoker) this.renderer.cloudRenderer();
+		this.renderer = new RemoteLevelRenderer(minecraft, this.renderState, width, height);
+		CloudRendererInvoker clouds = (CloudRendererInvoker) this.renderer.clouds();
 		clouds.netherview$apply(clouds.netherview$prepare(minecraft.getResourceManager(), Profiler.get()), minecraft.getResourceManager(), Profiler.get());
-		this.extractor = new LevelExtractor(minecraft, this.renderState, this.renderer);
 
 		ClientPacketListener connection = minecraft.getConnection();
 		// The type the server named for this world (any datapack or plugin-made world), else a guess from its name.
@@ -95,10 +83,9 @@ public final class RemoteDimension implements AutoCloseable {
 			type = types.getOrThrow(dimensionType(key));
 		}
 		ClientLevel.ClientLevelData data = new ClientLevel.ClientLevelData(minecraft.level.getDifficulty(), false, false);
-		this.level = new ClientLevel(connection, data, key, type, CHUNK_RADIUS, CHUNK_RADIUS, this.extractor, false, 0L,
-				key == Level.NETHER ? 32 : 63);
-		this.extractor.setLevel(this.level);
-		this.target = new TextureTarget("netherview " + key.identifier(), width, height, GpuFormat.RGBA8_UNORM, GpuFormat.D32_FLOAT);
+		this.level = this.renderer.newLevel(connection, data, key, type, CHUNK_RADIUS, key == Level.NETHER ? 32 : 63);
+		this.renderer.setLevel(this.level);
+		this.target = ClientVersioned.newTarget("netherview " + key.identifier(), width, height);
 	}
 
 	private static ResourceKey<DimensionType> dimensionType(ResourceKey<Level> key) {
@@ -171,23 +158,24 @@ public final class RemoteDimension implements AutoCloseable {
 
 	/** Same steps as ClientPacketListener.handleLevelChunkWithLight, aimed at this level. */
 	void acceptChunk(ClientboundLevelChunkWithLightPacket packet) {
-		int x = packet.x();
-		int z = packet.z();
-		this.level.getChunkSource().replaceWithPacketData(x, z, packet.chunkData());
-		ClientboundLightUpdatePacketData lightData = packet.lightData();
+		int x = ClientVersioned.chunkX(packet);
+		int z = ClientVersioned.chunkZ(packet);
+		ClientVersioned.replaceWithPacketData(this.level.getChunkSource(), x, z, ClientVersioned.chunkData(packet));
+		ClientboundLightUpdatePacketData lightData = ClientVersioned.lightData(packet);
 		this.level.queueLightUpdate(() -> {
 			this.applyLightData(x, z, lightData);
 			LevelChunk chunk = this.level.getChunkSource().getChunk(x, z, false);
 			if (chunk != null) {
 				this.enableChunkLight(chunk, x, z);
+				this.renderer.chunkReady(chunk.getPos());
 			}
 		});
 	}
 
 	private void applyLightData(int x, int z, ClientboundLightUpdatePacketData lightData) {
 		LevelLightEngine lightEngine = this.level.getChunkSource().getLightEngine();
-		this.readSectionList(x, z, lightEngine, LightLayer.SKY, lightData.skyYMask(), lightData.emptySkyYMask(), lightData.skyUpdates().iterator());
-		this.readSectionList(x, z, lightEngine, LightLayer.BLOCK, lightData.blockYMask(), lightData.emptyBlockYMask(), lightData.blockUpdates().iterator());
+		this.readSectionList(x, z, lightEngine, LightLayer.SKY, ClientVersioned.skyYMask(lightData), ClientVersioned.emptySkyYMask(lightData), ClientVersioned.skyUpdates(lightData).iterator());
+		this.readSectionList(x, z, lightEngine, LightLayer.BLOCK, ClientVersioned.blockYMask(lightData), ClientVersioned.emptyBlockYMask(lightData), ClientVersioned.blockUpdates(lightData).iterator());
 		lightEngine.setLightEnabled(new ChunkPos(x, z), true);
 	}
 
@@ -238,7 +226,6 @@ public final class RemoteDimension implements AutoCloseable {
 	@Override
 	public void close() {
 		this.closed = true;
-		this.extractor.setLevel(null);
 		this.renderer.close();
 		this.fog.close();
 		this.lightmap.close();

@@ -1,5 +1,6 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
 import dev.ryan.netherview.net.PortalFill;
@@ -150,7 +151,7 @@ public final class DimensionHandoff {
 		// dimension and blends from it over the next tick; start it fresh in the new one.
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.player != null) {
-			EnvironmentAttributeProbe probe = minecraft.gameRenderer.mainCamera().attributeProbe();
+			EnvironmentAttributeProbe probe = ClientVersioned.mainCamera().attributeProbe();
 			probe.reset();
 			probe.tick(level, minecraft.player.getEyePosition());
 		}
@@ -223,7 +224,7 @@ public final class DimensionHandoff {
 		if (remote != null && remote.center() != null) {
 			level.getChunkSource().updateViewCenter(remote.center().x(), remote.center().z());
 			for (ClientboundLevelChunkWithLightPacket chunk : remote.snapshotChunks()) {
-				if (level.getChunkSource().getChunk(chunk.x(), chunk.z(), false) == null) {
+				if (level.getChunkSource().getChunk(ClientVersioned.chunkX(chunk), ClientVersioned.chunkZ(chunk), false) == null) {
 					listener.handleLevelChunkWithLight(chunk);
 				}
 			}

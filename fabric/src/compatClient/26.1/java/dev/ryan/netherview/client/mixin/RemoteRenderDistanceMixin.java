@@ -9,15 +9,18 @@ import net.minecraft.client.renderer.LevelRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
+/**
+ * Remote views use their own (configurable, usually shorter) render distance: for the section
+ * grid, for noticing a change of it, and for the world border. (26.1: all in the level renderer.)
+ */
 @Mixin(LevelRenderer.class)
-public abstract class LevelRendererMixin {
-	/** A remote view's section grid is sized to its own render distance. */
+public abstract class RemoteRenderDistanceMixin {
 	@WrapOperation(
-			method = "invalidateCompiledGeometry",
+			method = {"allChanged", "cullTerrain", "extractLevel"},
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Options;getEffectiveRenderDistance()I"))
 	private int netherview$remoteRenderDistance(Options options, Operation<Integer> original) {
 		int distance = original.call(options);
-		return RemoteDimensions.isRemoteRenderer((LevelRenderer) (Object) this)
+		return RemoteDimensions.isRemote(this)
 				? Math.min(distance, ClientConfig.get().effectiveRemoteRenderDistance())
 				: distance;
 	}

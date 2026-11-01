@@ -1,5 +1,6 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.PortalGeometry;
 import com.mojang.blaze3d.ProjectionType;
 import com.mojang.blaze3d.pipeline.RenderTarget;
@@ -11,30 +12,22 @@ import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
-import com.mojang.renderpearl.api.pipeline.ColorTargetState;
-import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import dev.ryan.netherview.net.PortalEnd;
 import dev.ryan.netherview.net.PortalFill;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import com.mojang.renderpearl.api.pipeline.CompareOp;
-import com.mojang.renderpearl.api.pipeline.DepthStencilState;
-import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuSampler;
 import dev.ryan.netherview.client.RemoteDimensions.Link;
 import dev.ryan.netherview.client.mixin.GameRendererAccessor;
-import dev.ryan.netherview.client.mixin.LevelExtractorAccessor;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.TextureFilteringMethod;
-import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.Lightmap;
-import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.fog.FogRenderer;
 import net.minecraft.client.renderer.state.GameRenderState;
@@ -63,9 +56,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.OptionalDouble;
 
 /**
  * Draws the far side of a portal in two steps each frame.
@@ -98,68 +89,30 @@ public final class PortalViewRenderer {
 	/** Keeps the oblique near plane from passing through the remote camera when standing in a portal. */
 	private static final double MIN_CLIP_DISTANCE = 0.05;
 
-	private static final RenderPipeline COMPOSITE_PIPELINE = RenderPipeline.builder(RenderPipelines.GLOBALS_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/portal_view"))
-			.withBindGroupLayout(BindGroupLayouts.PROJECTION)
-			.withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
-			.withBindGroupLayout(BindGroupLayouts.SAMPLER0)
-			.withVertexShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_view"))
-			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_view"))
-			.withVertexBinding(0, DefaultVertexFormat.POSITION)
-			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-			.withCull(false)
-			.withColorTargetState(ColorTargetState.DEFAULT)
-			.withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
-			.build();
+	// ClientVersioned.pipeline(location, vertex shader, fragment shader, transforms, vertex format,
+	// samplers, cull, translucent, depth test always passes): built the way the running version's
+	// pipeline API wants.
+	private static final RenderPipeline COMPOSITE_PIPELINE = ClientVersioned.pipeline("pipeline/portal_view",
+			id("core/portal_view"), id("core/portal_view"), true, DefaultVertexFormat.POSITION, 1, false, false, false);
 
-	private static final RenderPipeline MERGE_PIPELINE = RenderPipeline.builder()
-			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/bridge_merge"))
-			.withBindGroupLayout(BindGroupLayouts.SAMPLER0_SAMPLER1)
-			.withVertexShader("core/screenquad")
-			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/bridge_merge"))
-			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-			.withColorTargetState(ColorTargetState.DEFAULT)
-			.withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
-			.build();
+	private static final RenderPipeline MERGE_PIPELINE = ClientVersioned.pipeline("pipeline/bridge_merge",
+			Identifier.withDefaultNamespace("core/screenquad"), id("core/bridge_merge"), false, null, 2, true, false, false);
 
-	private static final RenderPipeline REPLACE_PIPELINE = RenderPipeline.builder()
-			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/remote_fullscreen"))
-			.withBindGroupLayout(BindGroupLayouts.SAMPLER0_SAMPLER1)
-			.withVertexShader("core/screenquad")
-			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/remote_fullscreen"))
-			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-			.withColorTargetState(ColorTargetState.DEFAULT)
-			.withDepthStencilState(new DepthStencilState(CompareOp.ALWAYS_PASS, true))
-			.build();
+	private static final RenderPipeline REPLACE_PIPELINE = ClientVersioned.pipeline("pipeline/remote_fullscreen",
+			Identifier.withDefaultNamespace("core/screenquad"), id("core/remote_fullscreen"), false, null, 2, true, false, true);
 	/** How long the camera may stay "through" a portal waiting for the server to move the player. */
 	private static final long CROSSED_TIMEOUT_MS = 2000L;
 
-	private static final RenderPipeline TEXTURED_CARD_PIPELINE = RenderPipeline.builder(RenderPipelines.GLOBALS_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/portal_card_tex"))
-			.withBindGroupLayout(BindGroupLayouts.PROJECTION)
-			.withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
-			.withBindGroupLayout(BindGroupLayouts.SAMPLER0)
-			.withVertexShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_card_tex"))
-			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_card_tex"))
-			.withVertexBinding(0, DefaultVertexFormat.POSITION_TEX)
-			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-			.withCull(false)
-			.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
-			.withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
-			.build();
+	private static final RenderPipeline TEXTURED_CARD_PIPELINE = ClientVersioned.pipeline("pipeline/portal_card_tex",
+			id("core/portal_card_tex"), id("core/portal_card_tex"), true, DefaultVertexFormat.POSITION_TEX, 1, false, true, false);
 
-	private static final RenderPipeline CARD_PIPELINE = RenderPipeline.builder(RenderPipelines.GLOBALS_SNIPPET)
-			.withLocation(Identifier.fromNamespaceAndPath("netherview", "pipeline/portal_card"))
-			.withBindGroupLayout(BindGroupLayouts.PROJECTION)
-			.withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
-			.withVertexShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_view"))
-			.withFragmentShader(Identifier.fromNamespaceAndPath("netherview", "core/portal_card"))
-			.withVertexBinding(0, DefaultVertexFormat.POSITION)
-			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-			.withCull(false)
-			.withColorTargetState(ColorTargetState.DEFAULT)
-			.withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true))
-			.build();
+	private static final RenderPipeline CARD_PIPELINE = ClientVersioned.pipeline("pipeline/portal_card",
+			id("core/portal_view"), id("core/portal_card"), true, DefaultVertexFormat.POSITION, 0, false, false, false);
+
+	private static Identifier id(String path) {
+		return Identifier.fromNamespaceAndPath("netherview", path);
+	}
+
 	/** Extra margin around a portal's screen rectangle when narrowing a view's culling frustum (NDC units). */
 	private static final float CULL_RECT_MARGIN = 0.05F;
 	/** How far beyond the opening a live portal is assumed to hide what's behind it (its frame). */
@@ -204,7 +157,7 @@ public final class PortalViewRenderer {
 		if (minecraft.level == null || minecraft.player == null) {
 			return;
 		}
-		Camera main = minecraft.gameRenderer.mainCamera();
+		Camera main = ClientVersioned.mainCamera();
 		levelProjectionBuffer = RenderSystem.getProjectionMatrixBuffer();
 		renderBridge(minecraft, main, levelProjection);
 		trackCrossing(main.position());
@@ -522,7 +475,7 @@ public final class PortalViewRenderer {
 		remote.camera.place(main, remote.level, remoteEye, orientation);
 		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye));
 		remote.camera.place(main, remote.level, remoteEye, orientation, narrowedToRect(levelProjection, rect));
-		((LevelExtractorAccessor) remote.extractor).netherview$setPrevCamRotX(Double.NaN);
+		remote.renderer.forceRecull();
 		renderLevelInto(minecraft, main, remote, remoteEye, projection);
 	}
 
@@ -543,7 +496,7 @@ public final class PortalViewRenderer {
 	private static void renderLevelIntoTimed(Minecraft minecraft, Camera main, RemoteDimension remote, Vec3 remoteEye, Matrix4f projection) {
 		GameRenderer gameRenderer = minecraft.gameRenderer;
 		GameRendererAccessor gameRendererAccess = (GameRendererAccessor) gameRenderer;
-		RenderTarget mainTarget = gameRenderer.mainRenderTarget();
+		RenderTarget mainTarget = ClientVersioned.mainRenderTarget();
 		remote.ensureSize(mainTarget.width, mainTarget.height);
 		remote.primeProbe(remoteEye);
 		Vec3 eye = main.position();
@@ -552,34 +505,32 @@ public final class PortalViewRenderer {
 		DeltaTracker delta = minecraft.getDeltaTracker();
 		float partialTicks = delta.getGameTimeDeltaPartialTick(false);
 		CameraRenderState cameraState = remote.renderState.cameraRenderState;
-		remote.camera.extractRenderState(cameraState, delta);
+		ClientVersioned.extractCamera(remote.camera, cameraState, delta);
 		cameraState.fogType = remote.camera.getFluidInCamera();
 		cameraState.fogData = remote.fog.setupFog(
-				remote.camera, Math.min(minecraft.options.getEffectiveRenderDistance(), ClientConfig.get().effectiveRemoteRenderDistance()), delta, gameRenderer.bossOverlayWorldDarkening(partialTicks), remote.level);
-		remote.extractor.extract(delta, remote.camera, partialTicks);
-		remote.renderState.playerCompiledSectionCallback = null;
+				remote.camera, Math.min(minecraft.options.getEffectiveRenderDistance(), ClientConfig.get().effectiveRemoteRenderDistance()), delta, ClientVersioned.bossOverlayWorldDarkening(partialTicks), remote.level);
+		remote.renderer.extract(delta, remote.camera, partialTicks);
 		// Extraction pointed the shared dispatchers at the remote camera; point them back.
 		minecraft.getEntityRenderDispatcher().prepare(main, minecraft.crosshairPickEntity);
 		minecraft.getBlockEntityRenderDispatcher().prepare(eye);
 
-		fillLightmapState(gameRenderer.gameRenderState().lightmapRenderState, remote, partialTicks);
+		fillLightmapState(ClientVersioned.gameRenderState().lightmapRenderState, remote, partialTicks);
 		remote.lightmap.render(remote.lightmapState);
 
 		ProjectionType savedProjectionType = RenderSystem.getProjectionType();
 		GpuBufferSlice savedFog = RenderSystem.getShaderFog();
 		Lightmap savedLightmap = gameRendererAccess.netherview$getLightmap();
 		try {
-			gameRendererAccess.netherview$setMainRenderTarget(remote.target);
+			ClientVersioned.setMainRenderTarget(remote.target);
 			gameRendererAccess.netherview$setLightmap(remote.lightmap);
 			updateGlobals(gameRenderer, remoteEye);
 			RenderSystem.setProjectionMatrix(remote.projection.getBuffer(projection), ProjectionType.PERSPECTIVE);
 			remote.fog.updateBuffer(cameraState.fogData);
-			remote.renderer.render(
-					remote.resourcePool, false, cameraState, remote.fog.getBuffer(FogRenderer.FogMode.WORLD), cameraState.fogData.color, true, false);
+			ClientVersioned.renderLevel(remote.renderer.renderer, remote.resourcePool, delta, remote.renderState, remote.fog.getBuffer(FogRenderer.FogMode.WORLD));
 		} finally {
-			gameRendererAccess.netherview$setMainRenderTarget(mainTarget);
+			ClientVersioned.setMainRenderTarget(mainTarget);
 			gameRendererAccess.netherview$setLightmap(savedLightmap);
-			updateGlobals(gameRenderer, gameRenderer.gameRenderState().levelRenderState.cameraRenderState.pos);
+			updateGlobals(gameRenderer, ClientVersioned.gameRenderState().levelRenderState.cameraRenderState.pos);
 			RenderSystem.setProjectionMatrix(levelProjectionBuffer, savedProjectionType);
 			if (savedFog != null) {
 				RenderSystem.setShaderFog(savedFog);
@@ -592,13 +543,13 @@ public final class PortalViewRenderer {
 
 	/** Same values GameRenderer.render writes, but with the given camera position (terrain is drawn relative to it). */
 	private static void updateGlobals(GameRenderer gameRenderer, Vec3 cameraPos) {
-		GameRenderState state = gameRenderer.gameRenderState();
-		((GameRendererAccessor) gameRenderer).netherview$getGlobalSettingsUniform().update(
+		GameRenderState state = ClientVersioned.gameRenderState();
+		ClientVersioned.updateGlobals(((GameRendererAccessor) gameRenderer).netherview$getGlobalSettingsUniform(),
 				state.windowRenderState.width,
 				state.windowRenderState.height,
 				state.optionsRenderState.glintStrength,
-				state.levelRenderState.gameTime,
-				state.levelRenderState.worldPartialTicks,
+				state.levelRenderState,
+				Minecraft.getInstance().getDeltaTracker(),
 				state.optionsRenderState.menuBackgroundBlurriness,
 				cameraPos,
 				state.optionsRenderState.textureFiltering == TextureFilteringMethod.RGSS);
@@ -615,10 +566,10 @@ public final class PortalViewRenderer {
 		state.nightVisionEffectIntensity = main.nightVisionEffectIntensity;
 		state.nightVisionColor = main.nightVisionColor;
 		state.bossOverlayWorldDarkening = main.bossOverlayWorldDarkening;
-		state.blockLightTint = (Vector3fc) probe.getValue(EnvironmentAttributes.BLOCK_LIGHT_TINT, partialTicks);
+		state.blockLightTint = ClientVersioned.blockLightTint(probe, partialTicks);
 		state.skyFactor = (Float) probe.getValue(EnvironmentAttributes.SKY_LIGHT_FACTOR, partialTicks);
-		state.skyLightColor = (Vector3fc) probe.getValue(EnvironmentAttributes.SKY_LIGHT_COLOR, partialTicks);
-		state.ambientColor = (Vector3fc) probe.getValue(EnvironmentAttributes.AMBIENT_LIGHT_COLOR, partialTicks);
+		state.skyLightColor = ClientVersioned.skyLightColor(probe, partialTicks);
+		state.ambientColor = ClientVersioned.ambientLightColor(probe, partialTicks);
 	}
 
 	/**
@@ -638,22 +589,24 @@ public final class PortalViewRenderer {
 	/**
 	 * Replaces the near plane of {@code projection} with {@code plane} (view space).
 	 *
-	 * <p>Minecraft uses reversed Z: the near plane is where clip z = w, the far plane where
+	 * <p>With reversed Z (26.2+) the near plane is where clip z = w, the far plane where
 	 * clip z = 0 (with GL_ARB_clip_control) or z = -w (without, e.g. macOS). Setting the
-	 * z row to {@code row3 - a·plane} makes "z ≤ w" exactly "plane·v ≥ 0". The scale
-	 * {@code a} is the largest value that still keeps every corner of the original frustum
-	 * inside the new far plane, which preserves as much depth precision as possible.</p>
+	 * z row to {@code row3 - a·plane} makes "z ≤ w" exactly "plane·v ≥ 0". With the standard
+	 * range (26.1) the near plane is z = 0 or z = -w and the z row becomes {@code a·plane} or
+	 * {@code a·plane - row3}. The scale {@code a} is the largest value that still keeps every
+	 * corner of the original frustum inside the new far plane, which preserves as much depth
+	 * precision as possible.</p>
 	 */
 	static Matrix4f obliqueProjection(Matrix4f projection, Vector4f plane) {
-		boolean zZeroToOne = RenderSystem.getDevice().getDeviceInfo().isZZeroToOne();
+		boolean zZeroToOne = ClientVersioned.isZZeroToOne();
 		Matrix4f result = new Matrix4f(projection);
 		Vector4f clipPlane = result.invert(new Matrix4f()).transpose().transform(new Vector4f(plane));
 
-		float farZ = zZeroToOne ? 0.0F : -1.0F;
+		float zLow = zZeroToOne ? 0.0F : -1.0F; // the clip-space z range is [zLow, 1]
 		float maxDot = Float.NEGATIVE_INFINITY;
 		for (int sx = -1; sx <= 1; sx += 2) {
 			for (int sy = -1; sy <= 1; sy += 2) {
-				for (float sz : new float[] {farZ, 1.0F}) {
+				for (float sz : new float[] {zLow, 1.0F}) {
 					maxDot = Math.max(maxDot, clipPlane.x * sx + clipPlane.y * sy + clipPlane.z * sz + clipPlane.w);
 				}
 			}
@@ -663,7 +616,12 @@ public final class PortalViewRenderer {
 		}
 		float scale = (zZeroToOne ? 1.0F : 2.0F) / maxDot;
 		Vector4f wRow = result.getRow(3, new Vector4f());
-		result.setRow(2, wRow.sub(new Vector4f(plane).mul(scale)));
+		Vector4f scaledPlane = new Vector4f(plane).mul(scale);
+		if (ClientVersioned.REVERSED_DEPTH) {
+			result.setRow(2, wRow.sub(scaledPlane));
+		} else {
+			result.setRow(2, zZeroToOne ? scaledPlane : scaledPlane.sub(wRow));
+		}
 		return result;
 	}
 
@@ -698,14 +656,12 @@ public final class PortalViewRenderer {
 	 * replaced (the camera is through a portal).</p>
 	 */
 	private static void blitFullscreen(RenderTarget mainTarget, RemoteDimension bridge, RenderPipeline pipeline) {
-		try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
-				() -> "netherview fullscreen", mainTarget.getColorTextureView(), Optional.empty(),
-				mainTarget.getDepthTextureView(), OptionalDouble.empty())) {
-			pass.setPipeline(RenderSystem.getCompiledPipeline(pipeline));
+		try (RenderPass pass = ClientVersioned.renderPass(() -> "netherview fullscreen", mainTarget)) {
+			ClientVersioned.setPipeline(pass, pipeline);
 			GpuSampler nearest = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
-			pass.setUniform("Sampler0", bridge.target.getColorTextureView(), nearest);
-			pass.setUniform("Sampler1", bridge.target.getDepthTextureView(), nearest);
-			pass.draw(3, 1, 0, 0);
+			ClientVersioned.bindTexture(pass, "Sampler0", bridge.target.getColorTextureView(), nearest);
+			ClientVersioned.bindTexture(pass, "Sampler1", bridge.target.getDepthTextureView(), nearest);
+			ClientVersioned.drawFullscreen(pass);
 		} catch (RuntimeException e) {
 			if (!loggedFailure) {
 				loggedFailure = true;
@@ -732,7 +688,7 @@ public final class PortalViewRenderer {
 		RemoteDimension bridge = bridgeRendered;
 		bridgeRendered = null;
 		if (bridge != null) {
-			blitFullscreen(Minecraft.getInstance().gameRenderer.mainRenderTarget(), bridge, MERGE_PIPELINE);
+			blitFullscreen(ClientVersioned.mainRenderTarget(), bridge, MERGE_PIPELINE);
 		}
 		Link crossed = activeLink;
 		RemoteDimension crossedView = activeRemote;
@@ -740,7 +696,7 @@ public final class PortalViewRenderer {
 		activeRemote = null;
 		if (crossed != null && crossedView != null && activeFullscreen) {
 			activeFullscreen = false;
-			blitFullscreen(Minecraft.getInstance().gameRenderer.mainRenderTarget(), crossedView, REPLACE_PIPELINE);
+			blitFullscreen(ClientVersioned.mainRenderTarget(), crossedView, REPLACE_PIPELINE);
 			return;
 		}
 		for (Pass pass : passes) {
@@ -781,8 +737,8 @@ public final class PortalViewRenderer {
 	private static void drawWindow(Link link, RemoteDimension view, Vector4f color) {
 		Minecraft minecraft = Minecraft.getInstance();
 		GameRenderer gameRenderer = minecraft.gameRenderer;
-		RenderTarget mainTarget = gameRenderer.mainRenderTarget();
-		CameraRenderState mainCamera = gameRenderer.gameRenderState().levelRenderState.cameraRenderState;
+		RenderTarget mainTarget = ClientVersioned.mainRenderTarget();
+		CameraRenderState mainCamera = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState;
 		Vec3 eye = mainCamera.pos;
 		// The opening (front) and the same rectangle pushed away from the camera (back): a
 		// shallow open box. Up close the front quad falls inside the camera's near plane and
@@ -801,7 +757,7 @@ public final class PortalViewRenderer {
 		};
 
 		try (ByteBufferBuilder bytes = ByteBufferBuilder.exactlySized(DefaultVertexFormat.POSITION.getVertexSize() * triangles.length)) {
-			BufferBuilder builder = new BufferBuilder(bytes, PrimitiveTopology.TRIANGLES, DefaultVertexFormat.POSITION);
+			BufferBuilder builder = ClientVersioned.triangles(bytes, DefaultVertexFormat.POSITION);
 			for (int index : triangles) {
 				Vec3 corner = box[index].subtract(eye);
 				builder.addVertex((float) corner.x, (float) corner.y, (float) corner.z);
@@ -809,21 +765,16 @@ public final class PortalViewRenderer {
 			try (MeshData mesh = builder.buildOrThrow()) {
 				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> "netherview portal window", GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
 				try {
-					GpuBufferSlice transforms = color == null
-							? RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix))
-							: RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix), color);
+					GpuBufferSlice transforms = ClientVersioned.transform(new Matrix4f(mainCamera.viewRotationMatrix), color);
 					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
-					try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
-							() -> "netherview portal window", mainTarget.getColorTextureView(), Optional.empty(),
-							mainTarget.getDepthTextureView(), OptionalDouble.empty())) {
-						pass.setPipeline(RenderSystem.getCompiledPipeline(view != null ? COMPOSITE_PIPELINE : CARD_PIPELINE));
+					try (RenderPass pass = ClientVersioned.renderPass(() -> "netherview portal window", mainTarget)) {
+						ClientVersioned.setPipeline(pass, view != null ? COMPOSITE_PIPELINE : CARD_PIPELINE);
 						RenderSystem.bindDefaultUniforms(pass);
 						pass.setUniform("DynamicTransforms", transforms);
 						if (view != null) {
-							pass.setUniform("Sampler0", view.target.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+							ClientVersioned.bindTexture(pass, "Sampler0", view.target.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
 						}
-						pass.setVertexBuffer(0, vertices.slice());
-						pass.draw(triangles.length, 1, 0, 0);
+						ClientVersioned.drawVertices(pass, vertices, triangles.length);
 					}
 				} finally {
 					vertices.close();
@@ -854,8 +805,8 @@ public final class PortalViewRenderer {
 		}
 
 		GameRenderer gameRenderer = minecraft.gameRenderer;
-		RenderTarget mainTarget = gameRenderer.mainRenderTarget();
-		CameraRenderState mainCamera = gameRenderer.gameRenderState().levelRenderState.cameraRenderState;
+		RenderTarget mainTarget = ClientVersioned.mainRenderTarget();
+		CameraRenderState mainCamera = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState;
 		Vec3 eye = mainCamera.pos;
 		PortalEnd end = link.link().source();
 		Vec3[] corners = link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET);
@@ -864,7 +815,7 @@ public final class PortalViewRenderer {
 		Vec3 up = corners[3].subtract(corners[0]).scale(1.0 / end.height());
 		int vertexCount = end.width() * end.height() * 6;
 		try (ByteBufferBuilder bytes = ByteBufferBuilder.exactlySized(DefaultVertexFormat.POSITION_TEX.getVertexSize() * vertexCount)) {
-			BufferBuilder builder = new BufferBuilder(bytes, PrimitiveTopology.TRIANGLES, DefaultVertexFormat.POSITION_TEX);
+			BufferBuilder builder = ClientVersioned.triangles(bytes, DefaultVertexFormat.POSITION_TEX);
 			for (int i = 0; i < end.width(); i++) {
 				for (int j = 0; j < end.height(); j++) {
 					Vec3 p00 = origin.add(right.scale(i)).add(up.scale(j));
@@ -882,17 +833,14 @@ public final class PortalViewRenderer {
 			try (MeshData mesh = builder.buildOrThrow()) {
 				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> "netherview portal card", GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
 				try {
-					GpuBufferSlice transforms = RenderSystem.getDynamicUniforms().writeTransform(new Matrix4f(mainCamera.viewRotationMatrix), tint);
+					GpuBufferSlice transforms = ClientVersioned.transform(new Matrix4f(mainCamera.viewRotationMatrix), tint);
 					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
-					try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
-							() -> "netherview portal card", mainTarget.getColorTextureView(), Optional.empty(),
-							mainTarget.getDepthTextureView(), OptionalDouble.empty())) {
-						pass.setPipeline(RenderSystem.getCompiledPipeline(TEXTURED_CARD_PIPELINE));
+					try (RenderPass pass = ClientVersioned.renderPass(() -> "netherview portal card", mainTarget)) {
+						ClientVersioned.setPipeline(pass, TEXTURED_CARD_PIPELINE);
 						RenderSystem.bindDefaultUniforms(pass);
 						pass.setUniform("DynamicTransforms", transforms);
-						pass.setUniform("Sampler0", atlas.getTextureView(), atlas.getSampler());
-						pass.setVertexBuffer(0, vertices.slice());
-						pass.draw(vertexCount, 1, 0, 0);
+						ClientVersioned.bindTexture(pass, "Sampler0", atlas.getTextureView(), atlas.getSampler());
+						ClientVersioned.drawVertices(pass, vertices, vertexCount);
 					}
 				} finally {
 					vertices.close();

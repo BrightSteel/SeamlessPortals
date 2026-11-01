@@ -1,5 +1,6 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
 import dev.ryan.netherview.net.PortalLink;
@@ -11,9 +12,7 @@ import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.SectionOcclusionGraph;
-import net.minecraft.client.renderer.extract.LevelExtractor;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -55,6 +54,8 @@ public final class RemoteDimensions {
 	private static ClientLevel trackedLevel;
 	/** The remote that showed the dimension the player just walked into; see {@link PortalViewRenderer}. */
 	private static RemoteDimension bridge;
+	/** Every view, bridge included, as last published: mixins ask from worker threads too (26.1's culling graph). */
+	private static volatile List<RemoteDimension> published = List.of();
 	private static int bridgeTicks;
 	private static final int BRIDGE_MIN_TICKS = 2;
 	private static final int BRIDGE_MAX_TICKS = 10;
@@ -116,14 +117,15 @@ public final class RemoteDimensions {
 		}
 		for (RemoteDimension view : allViews()) {
 			for (BlockPos pos : positions) {
-				view.extractor.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+				view.renderer.setBlockDirty(pos);
 			}
 		}
 	}
 
-	public static boolean isRemoteExtractor(LevelExtractor extractor) {
-		for (RemoteDimension view : allViews()) {
-			if (view.extractor == extractor) {
+	/** Whether a level renderer or extractor (as a mixin sees it) is a remote view's. */
+	public static boolean isRemote(Object rendererPart) {
+		for (RemoteDimension view : published) {
+			if (view.renderer.owns(rendererPart)) {
 				return true;
 			}
 		}
@@ -131,7 +133,7 @@ public final class RemoteDimensions {
 	}
 
 	public static boolean isRemoteGraph(SectionOcclusionGraph graph) {
-		for (RemoteDimension view : allViews()) {
+		for (RemoteDimension view : published) {
 			if (view.renderer.sectionOcclusionGraph() == graph) {
 				return true;
 			}
@@ -139,14 +141,6 @@ public final class RemoteDimensions {
 		return false;
 	}
 
-	public static boolean isRemoteRenderer(LevelRenderer renderer) {
-		for (RemoteDimension view : allViews()) {
-			if (view.renderer == renderer) {
-				return true;
-			}
-		}
-		return false;
-	}
 
 	/**
 	 * The player just came through {@code back}'s destination: install the way back right
@@ -299,7 +293,7 @@ public final class RemoteDimensions {
 			// The bridge doubles the frame's cost, so it ends as soon as the main renderer has
 			// meshed what it was given (fade-in is off right after a hand-off, so nothing is half-drawn).
 			boolean caughtUp = bridgeTicks >= BRIDGE_MIN_TICKS
-					&& minecraft.levelRenderer.isSectionCompiledAndVisible(minecraft.gameRenderer.mainCamera().blockPosition(), 0L)
+					&& ClientVersioned.isSectionCompiledAndVisible(minecraft.levelRenderer, ClientVersioned.mainCamera().blockPosition())
 					&& minecraft.levelRenderer.hasRenderedAllSections();
 			if (caughtUp || bridgeTicks >= BRIDGE_MAX_TICKS || bridge.level.dimension() != minecraft.level.dimension()) {
 				closeBridge();
@@ -334,10 +328,12 @@ public final class RemoteDimensions {
 	}
 
 	private static void publishRemoteLevels() {
+		List<RemoteDimension> all = allViews();
 		Set<ClientLevel> levels = new HashSet<>();
-		for (RemoteDimension view : allViews()) {
+		for (RemoteDimension view : all) {
 			levels.add(view.level);
 		}
+		published = List.copyOf(all);
 		PortalHiding.setRemoteLevels(levels);
 	}
 

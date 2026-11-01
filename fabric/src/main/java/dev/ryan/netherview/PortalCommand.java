@@ -7,6 +7,7 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
+import dev.ryan.netherview.compat.Versioned;
 import dev.ryan.netherview.server.CustomPortal;
 import dev.ryan.netherview.server.CustomPortals;
 import dev.ryan.netherview.server.PortalAdmin;
@@ -25,8 +26,6 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.PermissionLevel;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 
@@ -67,17 +66,7 @@ final class PortalCommand {
 				.executes(context -> help(context.getSource()))
 				.then(Commands.literal("help").executes(context -> help(context.getSource())))
 				.then(Commands.literal("wand").executes(run(context -> {
-					ServerPlayer player = context.getSource().getPlayerOrException();
-					ItemStack wand = PortalWands.create();
-					if (!player.getInventory().add(wand)) {
-						// Full inventory: drop it at the player's feet, as /give does.
-						ItemEntity drop = player.createItemStackToDrop(wand, false, false);
-						if (drop != null) {
-							drop.setNoPickUpDelay();
-							drop.setTarget(player.getUUID());
-							drop.level().addFreshEntity(drop);
-						}
-					}
+					Versioned.give(context.getSource().getPlayerOrException(), PortalWands.create());
 					return PortalAdmin.wandHelp();
 				})))
 				.then(Commands.literal("create").then(name("name")

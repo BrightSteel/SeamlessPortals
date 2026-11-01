@@ -2,8 +2,10 @@ plugins {
 	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 }
 
+apply from: rootProject.file('gradle/versions.gradle')
+
 base {
-	archivesName = 'netherview-fabric'
+	archivesName = "netherview-fabric-mc${mcProps.minecraft_version}"
 }
 
 loom {
@@ -40,6 +42,11 @@ loom {
 		}
 	}
 
+	// Worlds aren't downgradable: each Minecraft version runs in its own folder (26.3 keeps run/).
+	if (mcProps.minecraft_version != '26.3') {
+		runs.configureEach { runDir = "run-${mcProps.minecraft_version}" }
+	}
+
 	mods {
 		"netherview" {
 			sourceSet sourceSets.main
@@ -50,19 +57,66 @@ loom {
 
 // Server half (portal discovery, chunk/entity streaming, travel) shared with the Paper plugin.
 sourceSets.main.java.srcDir rootProject.file('common/src/main/java')
+// The code that differs between Minecraft versions: the folders versions/<mc>.properties names
+// (compat=26.3,26.2+ is 26.3's own, then what 26.2 and 26.3 share), under src/compat (server
+// and common) and src/compatClient.
+def compatNames = mcProps.compat.split(',')*.trim()
+def compatClientDirs = compatNames.collect { file("src/compatClient/${it}/java") }.findAll { it.exists() }
+compatNames.each { name ->
+	if (file("src/compat/${name}/java").exists()) {
+		sourceSets.main.java.srcDir "src/compat/${name}/java"
+	}
+}
+compatClientDirs.each { sourceSets.client.java.srcDir it }
+
+// Older versions name some client classes differently (versions/imports-<compat>.txt lists them):
+// the client sources are compiled from a copy with those names rewritten.
+def importMap = rootProject.file("versions/imports-${compatNames[0]}.txt")
+if (importMap.exists()) {
+	// Both spellings: dotted (imports, qualified names) and slashed (descriptors in mixin targets).
+	def rewrites = importMap.readLines().findAll { it.trim() && !it.startsWith('#') }.collectMany {
+		def (from, to) = it.trim().split(/\s+/)
+		[[from, to], [from.replace('.', '/'), to.replace('.', '/')]]
+	}.sort { -it[0].length() } // longest first: GpuBufferSlice before GpuBuffer
+	def rewritten = layout.buildDirectory.dir("generated/client-src/${mcProps.minecraft_version}")
+	def rewriteClientImports = tasks.register('rewriteClientImports', Sync) {
+		from 'src/client/java'
+		into rewritten
+		inputs.file importMap
+		filter { String line -> rewrites.inject(line) { text, rule -> text.replace(rule[0], rule[1]) } }
+	}
+	sourceSets.client.java.srcDirs = [rewritten] + compatClientDirs
+	tasks.named('compileClientJava') { dependsOn rewriteClientImports }
+}
 
 dependencies {
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	minecraft "com.mojang:minecraft:${mcProps.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${mcProps.fabric_api_version}"
 }
 
 processResources {
-	def version = project.version
-	inputs.property "version", version
+	def props = [version: project.version, minecraft_range: mcProps.minecraft_range]
+	inputs.properties props
 
 	filesMatching("fabric.mod.json") {
-		expand "version": version
+		expand props
+	}
+}
+
+// Shaders are written in 26.3's style. Older versions spell #include as #moj_import, and their
+// own shaders (e.g. screenquad.vsh) pass values between stages by name, so ours drop the
+// separate-shader-objects extension and the layout(location = n) on stage inputs and outputs.
+if (mcProps.shader_import != '#include') {
+	tasks.named('processClientResources') {
+		def directive = mcProps.shader_import
+		inputs.property 'shaderImport', directive
+		filesMatching('assets/netherview/shaders/**') {
+			filter { String line ->
+				line.startsWith('#extension GL_ARB_separate_shader_objects') ? null
+						: line.replaceFirst(/^#include </, "${directive} <").replaceFirst(/^layout\(location = \d+\) (in|out) /, '$1 ')
+			}
+		}
 	}
 }
 

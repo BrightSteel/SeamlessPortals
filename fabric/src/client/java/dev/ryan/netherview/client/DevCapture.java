@@ -1,5 +1,6 @@
 package dev.ryan.netherview.client;
 
+import dev.ryan.netherview.compat.ClientVersioned;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
@@ -34,7 +35,7 @@ final class DevCapture {
 			return;
 		}
 		int frame = 15 - burstFrames--;
-		grab(minecraft, "arrival_" + burstTrip + "_" + frame + ".png", minecraft.gameRenderer.mainRenderTarget());
+		grab(minecraft, "arrival_" + burstTrip + "_" + frame + ".png", ClientVersioned.mainRenderTarget());
 	}
 
 	static void tick(Minecraft minecraft) {
@@ -42,7 +43,7 @@ final class DevCapture {
 			return;
 		}
 		int n = shot++;
-		grab(minecraft, "nv_" + n + "_main.png", minecraft.gameRenderer.mainRenderTarget());
+		grab(minecraft, "nv_" + n + "_main.png", ClientVersioned.mainRenderTarget());
 		RenderTarget remote = PortalViewRenderer.lastRemoteTarget();
 		if (remote != null) {
 			grab(minecraft, "nv_" + n + "_remote.png", remote);

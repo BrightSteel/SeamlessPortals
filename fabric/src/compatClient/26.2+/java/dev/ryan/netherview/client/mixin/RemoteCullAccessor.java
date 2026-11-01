@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
  * made to re-cull every frame.
  */
 @Mixin(LevelExtractor.class)
-public interface LevelExtractorAccessor {
+public interface RemoteCullAccessor {
 	@Accessor("prevCamRotX")
 	void netherview$setPrevCamRotX(double value);
 }
