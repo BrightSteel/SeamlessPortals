@@ -185,6 +185,16 @@ public final class RemoteDimensions {
 		return false;
 	}
 
+	/** Whether {@code level} is a remote view's (not the player's). */
+	public static boolean isRemoteLevel(ClientLevel level) {
+		for (RemoteDimension view : published) {
+			if (view.level == level) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public static boolean isRemoteGraph(SectionOcclusionGraph graph) {
 		for (RemoteDimension view : published) {
 			if (view.renderer.sectionOcclusionGraph() == graph) {
@@ -202,6 +212,21 @@ public final class RemoteDimensions {
 	 */
 	static RemoteDimension installArrival(PortalLink back, ResourceKey<Level> backDimension, List<ClientboundLevelChunkWithLightPacket> chunks,
 			List<Packet<ClientGamePacketListener>> entities) {
+		return installWayBack(back, backDimension, chunks, entities, false);
+	}
+
+	/**
+	 * As {@link #installArrival}, for a portal within the player's own world: the other
+	 * portals around stay linked (the level didn't change), and the way back gets a view of
+	 * its own rather than taking one another window is using.
+	 */
+	static RemoteDimension installSameWorldArrival(PortalLink back, ResourceKey<Level> dimension, List<ClientboundLevelChunkWithLightPacket> chunks,
+			List<Packet<ClientGamePacketListener>> entities) {
+		return installWayBack(back, dimension, chunks, entities, true);
+	}
+
+	private static RemoteDimension installWayBack(PortalLink back, ResourceKey<Level> backDimension, List<ClientboundLevelChunkWithLightPacket> chunks,
+			List<Packet<ClientGamePacketListener>> entities, boolean sameWorld) {
 		Minecraft minecraft = Minecraft.getInstance();
 		syncLevel(minecraft);
 		Link link = new Link(back, PortalGeometry.of(back), backDimension);
@@ -216,7 +241,7 @@ public final class RemoteDimensions {
 			VIEWS.computeIfAbsent(backDimension, key -> new ArrayList<>()).addFirst(remote);
 			publishRemoteLevels();
 		} else {
-			remote = view(backDimension, 0);
+			remote = view(backDimension, sameWorld ? VIEWS.getOrDefault(backDimension, List.of()).size() : 0);
 			remote.centerOn(center);
 		}
 		// Nearest first, and the chunks right behind the window at once: the player may be
@@ -229,7 +254,18 @@ public final class RemoteDimensions {
 			}
 		}
 		replay(remote, entities);
-		links = List.of(link);
+		if (sameWorld) {
+			List<Link> kept = new ArrayList<>();
+			for (Link other : links) {
+				if (!other.link().min().equals(back.min())) {
+					kept.add(other);
+				}
+			}
+			kept.add(link);
+			links = List.copyOf(kept);
+		} else {
+			links = List.of(link);
+		}
 		PortalHiding.setLinks(links);
 		return remote;
 	}
@@ -257,15 +293,15 @@ public final class RemoteDimensions {
 	}
 
 	/**
-	 * The player is backing into {@code link} (its window is behind them): keep a copy of their
-	 * own level around it, filled a few chunks a frame, for {@link PortalViewRenderer} to mesh
-	 * from their camera. If they go through, {@link #installArrival} takes it as the way back.
-	 * Returns it, or null if there's nothing to prepare (a portal within this world).
+	 * The player is near {@code link}: keep a copy of their own level around it, filled a few
+	 * chunks a frame, for {@link PortalViewRenderer} to mesh from their camera. If they go
+	 * through, the arrival takes it as the way back. Returns it, or null while the bridge of
+	 * a trip through this very portal is still up (it becomes this view when it retires).
 	 */
 	static RemoteDimension prepareWayBack(Link link) {
 		Minecraft minecraft = Minecraft.getInstance();
 		ClientLevel level = minecraft.level;
-		if (level == null || link.dest() == level.dimension()) {
+		if (level == null) {
 			return null;
 		}
 		preparedIdleTicks = 0;
@@ -348,7 +384,11 @@ public final class RemoteDimensions {
 			}
 			return;
 		}
-		closeBridge();
+		// A bridge still up from the trip before is a meshed copy of the world now being left,
+		// around the portal just used: the way back's view, if the player turned straight round.
+		if (bridge != null) {
+			retireBridge();
+		}
 		bridge = view;
 		bridgeTicks = 0;
 		dropBridgeEntities = entitiesCopied;
@@ -366,11 +406,30 @@ public final class RemoteDimensions {
 		// Nothing is destroyed, so only the bridge pass is forgotten: a full reset would also
 		// lose a crossing in progress (the player may be walking straight back).
 		PortalViewRenderer.forgetBridge();
+		if (dropBridgeEntities) {
+			dropBridgeEntities();
+		}
 		closePrepared();
 		prepared = bridge;
 		preparedIdleTicks = 0;
 		bridge = null;
 		publishRemoteLevels();
+		// As the bridge it hid portals as the player's level does; now it's a remote view, which
+		// hides others (a way back's destination among them). Re-mesh them under the new rules
+		// before it's shown as one.
+		for (BlockPos pos : PortalHiding.allHidden()) {
+			prepared.renderer.setBlockDirty(pos);
+		}
+	}
+
+	/** The new level has the bridge's entities and the server keeps those updated; its own copies would stop moving and show through as frozen doubles. */
+	private static void dropBridgeEntities() {
+		dropBridgeEntities = false;
+		List<Entity> stale = new ArrayList<>();
+		bridge.level.entitiesForRendering().forEach(stale::add);
+		for (Entity entity : stale) {
+			bridge.level.removeEntity(entity.getId(), Entity.RemovalReason.DISCARDED);
+		}
 	}
 
 	private static void closeBridge() {
@@ -485,6 +544,7 @@ public final class RemoteDimensions {
 				view.tick(minecraft.level);
 			}
 		}
+		RemoteClocks.tick(minecraft.level.getGameTime());
 		if (prepared != null && ++preparedIdleTicks > PREPARED_KEEP_TICKS) {
 			closePrepared();
 		}
@@ -492,14 +552,7 @@ public final class RemoteDimensions {
 			bridge.tick(minecraft.level);
 			bridgeTicks++;
 			if (dropBridgeEntities && bridgeTicks >= BRIDGE_ENTITY_TICKS) {
-				// The new level has them now and the server keeps those updated; this copy would
-				// stop moving and show through as frozen doubles.
-				dropBridgeEntities = false;
-				List<Entity> stale = new ArrayList<>();
-				bridge.level.entitiesForRendering().forEach(stale::add);
-				for (Entity entity : stale) {
-					bridge.level.removeEntity(entity.getId(), Entity.RemovalReason.DISCARDED);
-				}
+				dropBridgeEntities();
 			}
 			// The bridge doubles the frame's cost, so it ends as soon as the main renderer draws
 			// (nearly) as much as the bridge does: fade-in is off right after a hand-off, so
@@ -519,6 +572,7 @@ public final class RemoteDimensions {
 
 	/** Everything, bridge included (disconnect). */
 	public static void clear() {
+		RemoteClocks.clear();
 		closeBridge();
 		closePrepared();
 		clearRemotes();

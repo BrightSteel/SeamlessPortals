@@ -100,7 +100,12 @@ public final class RemoteDimension implements AutoCloseable {
 			type = types.getOrThrow(dimensionType(key));
 		}
 		ClientLevel.ClientLevelData data = new ClientLevel.ClientLevelData(minecraft.level.getDifficulty(), false, false);
-		this.level = this.renderer.newLevel(connection, data, key, type, CHUNK_RADIUS, key == Level.NETHER ? 32 : 63);
+		RemoteClocks.beginConstructing(key);
+		try {
+			this.level = this.renderer.newLevel(connection, data, key, type, CHUNK_RADIUS, key == Level.NETHER ? 32 : 63);
+		} finally {
+			RemoteClocks.endConstructing();
+		}
 		this.renderer.setLevel(this.level);
 		this.target = ClientVersioned.newTarget("netherview " + key.identifier(), width, height);
 	}
@@ -295,6 +300,15 @@ public final class RemoteDimension implements AutoCloseable {
 	/** Once per client tick: drain queued light work, step entities (interpolation, animation), and keep environment attributes (fog colour etc.) current. */
 	void tick(ClientLevel playerLevel) {
 		this.level.setTimeFromServer(playerLevel.getGameTime());
+		// Sky colour, sun angle and the like are cached a tick at a time; vanilla clears the
+		// cache in the player's level's own tick, which a remote level never runs. Left alone,
+		// a view kept for a while shows the sky of whenever it last filled the cache.
+		this.level.environmentAttributes().invalidateTickCache();
+		if (this.key == playerLevel.dimension()) {
+			// A view of the player's own world (a portal within it): the same weather.
+			this.level.setRainLevel(playerLevel.getRainLevel(1.0F));
+			this.level.setThunderLevel(playerLevel.getThunderLevel(1.0F));
+		}
 		this.level.update();
 		this.level.tickEntities();
 		if (this.camera.isInitialized()) {

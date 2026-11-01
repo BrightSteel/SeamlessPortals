@@ -63,6 +63,13 @@ public final class PortalHiding {
 		return false;
 	}
 
+	/** Every portal block hidden anywhere, for a view whose hiding rules just changed (see RemoteDimensions#retireBridge). */
+	static Set<BlockPos> allHidden() {
+		Set<BlockPos> all = new HashSet<>(hiddenInRemoteLevels);
+		all.addAll(hiddenInPlayerLevel);
+		return all;
+	}
+
 	static void setRemoteLevels(Set<ClientLevel> levels) {
 		remoteLevels = Set.copyOf(levels);
 	}
@@ -74,6 +81,10 @@ public final class PortalHiding {
 			if (link.link().dest().fill() != PortalFill.NONE) {
 				addEnd(nextRemote, link.link().dest()); // a virtual destination has nothing to hide
 			}
+			// The source too: a copy of the player's own world (a portal within it, or the way
+			// back prepared before a trip) has it, and it's about to be a way back's destination;
+			// meshed as a swirl now, it would show for a frame while it's re-meshed then.
+			addEnd(nextRemote, link.link().source());
 		}
 		Set<BlockPos> previousRemote = hiddenInRemoteLevels;
 		if (!nextRemote.equals(previousRemote)) {

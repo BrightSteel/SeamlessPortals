@@ -11,6 +11,9 @@ import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ClientboundRespawnPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTimePacket;
+import net.minecraft.client.multiplayer.ClientLevel;
+import dev.ryan.netherview.client.RemoteClocks;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -86,6 +89,14 @@ public abstract class ClientPacketListenerMixin {
 	private void netherview$noteServerEntity(ClientboundAddEntityPacket packet, CallbackInfo ci) {
 		if (DimensionHandoff.onServerEntity(packet, ((ClientPacketListenerAccessor) this).netherview$getLevel())) {
 			ci.cancel();
+		}
+	}
+
+	@Inject(method = "handleSetTime", at = @At("TAIL"))
+	private void netherview$rememberClocks(ClientboundSetTimePacket packet, CallbackInfo ci) {
+		ClientLevel level = ((ClientPacketListenerAccessor) this).netherview$getLevel();
+		if (level != null) {
+			RemoteClocks.onSetTime(level.dimension(), packet.gameTime(), packet.clockUpdates());
 		}
 	}
 }

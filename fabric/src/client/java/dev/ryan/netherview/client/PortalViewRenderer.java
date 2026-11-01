@@ -356,6 +356,9 @@ public final class PortalViewRenderer {
 		}
 
 		Map<BlockPos, RemoteDimension> assigned = assignViews(live);
+		// Before the windows: a warm-up pass may use a window's own view, whose image must end
+		// up being the window's.
+		warmBehind(minecraft, main, levelProjection);
 		for (Link link : live) {
 			RemoteDimension view = assigned.get(link.link().min());
 			Vector4f rect = screenRect(link, main, levelProjection);
@@ -375,7 +378,6 @@ public final class PortalViewRenderer {
 			}
 		}
 		assignments = assigned;
-		warmBehind(minecraft, main, levelProjection);
 	}
 
 	/**
@@ -384,8 +386,8 @@ public final class PortalViewRenderer {
 	 * they back in, the far side they'll face (that window was behind them, never drawn).
 	 * Near a portal, take turns rendering these now and then, not shown, just so they're
 	 * meshed in time: a prepared copy of their own level ({@link RemoteDimensions#prepareWayBack})
-	 * from their own camera, roughly what the window back will show; and while the portal's
-	 * window isn't drawn, its far side from the camera they'd have through it (as
+	 * from their own camera, roughly what the window back will show; and within a step or two
+	 * of the portal, its far side from the camera they'd have through it (as
 	 * {@link #renderCrossed} will).
 	 */
 	private static void warmBehind(Minecraft minecraft, Camera main, Matrix4f levelProjection) {
@@ -403,9 +405,9 @@ public final class PortalViewRenderer {
 			// Prepared from a way off: its first render is a stall, better not right at the portal.
 			RemoteDimension back = RemoteDimensions.prepareWayBack(link);
 			RemoteDimension remote = RemoteDimensions.viewFor(link.link(), link.dest());
-			// A drawn window is meshing that side already (and its view is busy).
-			boolean farSide = remote != null && link.geometry().sourceBox().inflate(WARM_DISTANCE).contains(eye)
-					&& passes.stream().noneMatch(pass -> pass.view() == remote);
+			// Even with its window on screen: what a window shows is only what lies within it,
+			// and a sliver of window (backing in, looking down) meshes next to nothing.
+			boolean farSide = remote != null && link.geometry().sourceBox().inflate(WARM_DISTANCE).contains(eye);
 			try {
 				if (phase == 0 && farSide) {
 					PortalGeometry geometry = link.geometry();

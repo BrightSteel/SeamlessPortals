@@ -58,6 +58,9 @@ public final class DimensionHandoff {
 	 * once the bridge ends, and the hand-off already filled the level, so it is skipped briefly.
 	 */
 	private static final long FADE_SUPPRESS_MS = 2000L;
+	/** How long after a hand-off terrain GPU buffers are kept rather than freed and allocated anew. */
+	private static final long KEEP_TERRAIN_BUFFERS_MS = 3000L;
+	private static long keepTerrainBuffersUntil;
 	/** Rounds of the light queue that drain a full hand-off fill (each takes at least a tenth, or 10). */
 	private static final int LIGHT_DRAIN_ROUNDS = 64;
 
@@ -111,6 +114,7 @@ public final class DimensionHandoff {
 	private static Vec3 heldOldPosition;
 	private static float heldYRotO;
 	private static float heldXRotO;
+	private static boolean heldOnGround;
 	private static Vec3 heldVelocity;
 	private static float heldYRot;
 	private static float heldXRot;
@@ -209,6 +213,7 @@ public final class DimensionHandoff {
 		if (chunks.isEmpty() || level == null) {
 			return;
 		}
+		keepTerrainBuffersUntil = Util.getMillis() + KEEP_TERRAIN_BUFFERS_MS;
 		RemoteDimensions.adoptAsBridge(level.dimension(), pendingView, true);
 		fillSource = pendingView;
 		pendingView = null;
@@ -277,11 +282,7 @@ public final class DimensionHandoff {
 		// frame later; with no loading screen to hide that, place it now.
 		placeAtArrival();
 		if (arrivalGeometry != null && arrivalVelocity != null) {
-			Vec3 normal = arrivalGeometry.destNormal();
-			double along = arrivalVelocity.dot(normal);
-			if (Math.abs(along) > 1.0E-4) {
-				PortalViewRenderer.arrivedThrough(arrivalGeometry.destCenter(), normal.scale(Math.signum(along)));
-			}
+			arrivedThrough(arrivalGeometry, arrivalVelocity);
 		}
 		carryOver(previousPlayer, Minecraft.getInstance().player);
 		previousPlayer = null;
@@ -320,6 +321,7 @@ public final class DimensionHandoff {
 			heldXRot = player.getXRot();
 			heldYRotO = player.yRotO;
 			heldXRotO = player.xRotO;
+			heldOnGround = player.onGround();
 		}
 	}
 
@@ -335,10 +337,14 @@ public final class DimensionHandoff {
 			player.setDeltaMovement(heldVelocity);
 			// Snapping also resets the previous tick's position, which the camera interpolates
 			// from: it would stand still until the next tick.
-			setPrevious(player, heldOldPosition, heldYRotO, heldXRotO);
+			if (heldOldPosition != null) {
+				setPrevious(player, heldOldPosition, heldYRotO, heldXRotO);
+			}
+			player.setOnGround(heldOnGround);
 		}
 		holdThroughPlacement = false;
 		heldPosition = null;
+		heldOldPosition = null;
 	}
 
 	/**
@@ -360,10 +366,16 @@ public final class DimensionHandoff {
 		LocalPlayer player = minecraft.player;
 		float[] rotation = geometry.toDestRotation(player.getYRot(), player.getXRot());
 		heldPosition = geometry.toDest(player.position());
+		heldOldPosition = geometry.toDest(new Vec3(player.xo, player.yo, player.zo));
 		heldVelocity = geometry.rotate(player.getDeltaMovement());
 		heldYRot = rotation[0];
 		heldXRot = rotation[1];
+		float[] previousRotation = geometry.toDestRotation(player.yRotO, player.xRotO);
+		heldYRotO = previousRotation[0];
+		heldXRotO = previousRotation[1];
+		heldOnGround = player.onGround();
 		holdThroughPlacement = true;
+		arrivedThrough(geometry, heldVelocity);
 
 		RemoteDimension remote = RemoteDimensions.viewFor(announced, level.dimension());
 		if (remote != null && remote.center() != null) {
@@ -375,6 +387,29 @@ public final class DimensionHandoff {
 			}
 			RemoteDimensions.adoptAsBridge(level.dimension(), remote, false);
 			fadeSuppressedUntil = Util.getMillis() + FADE_SUPPRESS_MS;
+		}
+		// The way back right away, as after a change of world (see afterRespawn): otherwise the
+		// portal just come out of is a swirl until the server's next scan. The player's own
+		// level still has everything around it.
+		if (announced.dest().fill() != PortalFill.NONE) {
+			PortalLink back = announced.reversed(level.dimension().identifier().toString(), announced.destDimensionType());
+			ChunkPos backCenter = ChunkPos.containing(BlockPos.containing(geometry.sourceCenter()));
+			ResourceKey<Level> dimension = level.dimension();
+			List<ClientboundLevelChunkWithLightPacket> chunks = RemoteDimension.snapshotChunks(level, backCenter, RemoteDimension.chunkRadius(),
+					(x, z) -> RemoteDimensions.preparedHas(dimension, backCenter, x, z));
+			List<Packet<ClientGamePacketListener>> entities = RemoteDimension.snapshotEntities(level, listener, backCenter, RemoteDimension.chunkRadius());
+			filling = true;
+			try {
+				RemoteDimension view = RemoteDimensions.installSameWorldArrival(back, dimension, chunks, entities);
+				for (Packet<ClientGamePacketListener> packet : entities) {
+					if (packet instanceof ClientboundAddEntityPacket add && view.level.getEntity(add.getId()) != null) {
+						seededEntities.computeIfAbsent(view.level, key -> new IntOpenHashSet()).add(add.getId());
+					}
+				}
+				seededEntitiesUntil = Util.getMillis() + SEEDED_ENTITY_MS;
+			} finally {
+				filling = false;
+			}
 		}
 		return true;
 	}
@@ -462,6 +497,11 @@ public final class DimensionHandoff {
 	}
 
 	/** For a moment after arriving, new chunk sections appear at once instead of fading in. */
+	/** Right after a hand-off: see the KeepTerrainBuffers and KeepTerrainHeaps mixins. */
+	public static boolean keepTerrainBuffers() {
+		return Util.getMillis() < keepTerrainBuffersUntil;
+	}
+
 	public static boolean suppressChunkFade() {
 		return Util.getMillis() < fadeSuppressedUntil;
 	}
@@ -491,6 +531,9 @@ public final class DimensionHandoff {
 			// next (most visible flying or sprinting). Carry the previous tick through too.
 			float[] previousRotation = arrivalGeometry.toDestRotation(from.yRotO, from.xRotO);
 			setPrevious(to, arrivalGeometry.toDest(new Vec3(from.xo, from.yo, from.zo)), previousRotation[0], previousRotation[1]);
+			// A new player object starts airborne: its first tick would move with air control
+			// (a stumble while walking through) until it finds the ground again.
+			to.setOnGround(from.onGround());
 			float turn = to.getYRot() - from.getYRot();
 			to.yBodyRot = from.yBodyRot + turn;
 			to.yBodyRotO = from.yBodyRotO + turn;
@@ -509,6 +552,15 @@ public final class DimensionHandoff {
 		((LivingEntityAccessor) to).netherview$setItemSwapTicker(((LivingEntityAccessor) from).netherview$getItemSwapTicker());
 		((PlayerAccessor) to).netherview$setLastItemInMainHand(((PlayerAccessor) from).netherview$getLastItemInMainHand());
 		ClientVersioned.carryHands(from, to);
+	}
+
+	/** Tell the renderer which portal the player is coming out of, and which way (see {@link PortalViewRenderer#arrivedThrough}). */
+	private static void arrivedThrough(PortalGeometry geometry, Vec3 velocity) {
+		Vec3 normal = geometry.destNormal();
+		double along = velocity.dot(normal);
+		if (Math.abs(along) > 1.0E-4) {
+			PortalViewRenderer.arrivedThrough(geometry.destCenter(), normal.scale(Math.signum(along)));
+		}
 	}
 
 	private static void setPrevious(LocalPlayer player, Vec3 position, float yRot, float xRot) {

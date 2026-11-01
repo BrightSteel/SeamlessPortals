@@ -8,6 +8,7 @@
 		"ChunkFadeMixin",
 		"ClientPacketListenerAccessor",
 		"ChunkPacketDataAccessor",
+		"ClientLevelClockMixin",
 		"ClientPacketListenerMixin",
 		"CloudRendererInvoker",
 		"FramerateLimitTrackerMixin",
@@ -26,6 +27,8 @@
 		"SectionCompilerMixin",
 		"SectionNeighborsMixin",
 		"EntitySectionCullMixin",
+		"KeepTerrainBuffersMixin",
+		"KeepTerrainHeapsMixin",
 		"SectionOcclusionGraphMixin",
 		"TheEndGatewayRendererMixin"
 	],
