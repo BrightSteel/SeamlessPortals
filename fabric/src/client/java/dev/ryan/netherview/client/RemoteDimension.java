@@ -1,5 +1,20 @@
 package dev.ryan.netherview.client;
 
+import com.mojang.datafixers.util.Pair;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.decoration.HangingEntity;
+import net.minecraft.world.entity.item.FallingBlockEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
 import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.compat.RemoteLevelRenderer;
 import com.mojang.blaze3d.pipeline.TextureTarget;
@@ -120,6 +135,41 @@ public final class RemoteDimension implements AutoCloseable {
 		return this.center == null ? new ArrayList<>() : snapshotChunks(this.level, this.center, CHUNK_RADIUS + 3);
 	}
 
+	/**
+	 * This view's entities (mirrored from the server, with the server's ids), as the packets
+	 * that would add them to a level: spawn, synced data and equipment. Other players only if
+	 * the client knows them (a player can't be added otherwise).
+	 */
+	List<Packet<ClientGamePacketListener>> snapshotEntities(ClientPacketListener connection) {
+		List<Packet<ClientGamePacketListener>> packets = new ArrayList<>();
+		for (Entity entity : this.level.entitiesForRendering()) {
+			if (entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null) {
+				continue;
+			}
+			int data = entity instanceof FallingBlockEntity falling ? Block.getId(falling.getBlockState())
+					: entity instanceof HangingEntity hanging ? hanging.getDirection().get3DDataValue() : 0;
+			packets.add(new ClientboundAddEntityPacket(entity.getId(), entity.getUUID(), entity.getX(), entity.getY(), entity.getZ(),
+					entity.getXRot(), entity.getYRot(), entity.getType(), data, entity.getDeltaMovement(), entity.getYHeadRot()));
+			List<SynchedEntityData.DataValue<?>> values = entity.getEntityData().getNonDefaultValues();
+			if (values != null) {
+				packets.add(new ClientboundSetEntityDataPacket(entity.getId(), values));
+			}
+			if (entity instanceof LivingEntity living) {
+				List<Pair<EquipmentSlot, ItemStack>> equipment = new ArrayList<>();
+				for (EquipmentSlot slot : EquipmentSlot.values()) {
+					ItemStack item = living.getItemBySlot(slot);
+					if (!item.isEmpty()) {
+						equipment.add(Pair.of(slot, item.copy()));
+					}
+				}
+				if (!equipment.isEmpty()) {
+					packets.add(new ClientboundSetEquipmentPacket(entity.getId(), equipment));
+				}
+			}
+		}
+		return packets;
+	}
+
 	/** Loaded chunks of {@code level} within {@code radius} of {@code center}, as the packets that would load them. */
 	static List<ClientboundLevelChunkWithLightPacket> snapshotChunks(ClientLevel level, ChunkPos center, int radius) {
 		List<ClientboundLevelChunkWithLightPacket> chunks = new ArrayList<>();
@@ -158,18 +208,31 @@ public final class RemoteDimension implements AutoCloseable {
 
 	/** Same steps as ClientPacketListener.handleLevelChunkWithLight, aimed at this level. */
 	void acceptChunk(ClientboundLevelChunkWithLightPacket packet) {
+		acceptChunk(packet, false);
+	}
+
+	/**
+	 * Load a chunk. Its light (and so its meshing) normally waits in the level's light queue,
+	 * a few dozen chunks a tick as vanilla does; {@code now} applies it at once instead.
+	 */
+	void acceptChunk(ClientboundLevelChunkWithLightPacket packet, boolean now) {
 		int x = ClientVersioned.chunkX(packet);
 		int z = ClientVersioned.chunkZ(packet);
 		ClientVersioned.replaceWithPacketData(this.level.getChunkSource(), x, z, ClientVersioned.chunkData(packet));
 		ClientboundLightUpdatePacketData lightData = ClientVersioned.lightData(packet);
-		this.level.queueLightUpdate(() -> {
+		Runnable light = () -> {
 			this.applyLightData(x, z, lightData);
 			LevelChunk chunk = this.level.getChunkSource().getChunk(x, z, false);
 			if (chunk != null) {
 				this.enableChunkLight(chunk, x, z);
 				this.renderer.chunkReady(chunk.getPos());
 			}
-		});
+		};
+		if (now) {
+			light.run();
+		} else {
+			this.level.queueLightUpdate(light);
+		}
 	}
 
 	private void applyLightData(int x, int z, ClientboundLightUpdatePacketData lightData) {

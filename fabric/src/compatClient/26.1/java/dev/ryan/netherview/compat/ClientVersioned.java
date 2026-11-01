@@ -167,6 +167,16 @@ public final class ClientVersioned {
 		return Minecraft.getInstance().gameRenderer.getGameRenderState();
 	}
 
+	/** Carries the first-person hand animation state over to the player object a respawn created. */
+	public static void carryHands(net.minecraft.client.player.LocalPlayer from, net.minecraft.client.player.LocalPlayer to) {
+		// The game renderer keeps the first-person hand state across player objects.
+	}
+
+	/** Visible sections of the player's own level with something to draw. */
+	public static int mainRenderedSections() {
+		return Minecraft.getInstance().levelRenderer.countRenderedSections();
+	}
+
 	/** Re-mesh a block in the player's own level. */
 	public static void markMainBlockDirty(BlockPos pos) {
 		Minecraft.getInstance().levelRenderer.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());

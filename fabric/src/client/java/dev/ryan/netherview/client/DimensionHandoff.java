@@ -1,8 +1,18 @@
 package dev.ryan.netherview.client;
 
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.world.entity.Entity;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import dev.ryan.netherview.compat.ClientVersioned;
 import dev.ryan.netherview.PortalGeometry;
 import dev.ryan.netherview.client.mixin.ClientPacketListenerAccessor;
+import dev.ryan.netherview.client.mixin.LivingEntityAccessor;
+import dev.ryan.netherview.client.mixin.PlayerAccessor;
 import dev.ryan.netherview.net.PortalFill;
 import dev.ryan.netherview.net.PortalLink;
 import dev.ryan.netherview.net.PortalTravelPayload;
@@ -45,6 +55,21 @@ public final class DimensionHandoff {
 	private static PortalLink travel;
 	private static List<ClientboundLevelChunkWithLightPacket> pendingChunks = List.of();
 	private static ChunkPos pendingCenter;
+	private static RemoteDimension pendingView;
+	/** The bridge view's entities, as spawn packets, to add to the new level with its terrain. */
+	private static List<Packet<ClientGamePacketListener>> pendingEntities = List.of();
+	/** Entities a hand-off added that the server hasn't sent itself yet, and when to drop them. */
+	private static final IntSet seededEntities = new IntOpenHashSet();
+	private static long seededEntitiesUntil;
+	/** How long seeded entities wait for the server's own copy before they're taken away (out of its range). */
+	private static final long SEEDED_ENTITY_MS = 5000L;
+	/** The player object a hand-off respawn is replacing, to carry its hand and inventory over. */
+	private static LocalPlayer previousPlayer;
+	/** After a hand-off: the new level was filled from a remote view, see {@link #isStaleUnload}. */
+	private static boolean filledLevel;
+	/** Chunks the server itself has sent in the current level (not the ones a hand-off filled in). */
+	private static final LongSet serverChunks = new LongOpenHashSet();
+	private static boolean filling;
 
 	/** Where the player really is (client-side) when the server moved them, carried through the portal. */
 	private static Vec3 arrivalPosition;
@@ -76,27 +101,38 @@ public final class DimensionHandoff {
 
 	/** Respawn, on the main thread, before the old level is replaced. */
 	public static void beforeRespawn(ResourceKey<Level> newDimension) {
+		filledLevel = false;
+		serverChunks.clear();
 		PortalLink announced = travel;
 		travel = null;
 		Minecraft minecraft = Minecraft.getInstance();
 		pendingChunks = List.of();
 		pendingCenter = null;
+		pendingView = null;
+		pendingEntities = List.of();
+		seededEntities.clear();
+		previousPlayer = null;
 		arrivalPosition = null;
 		wayBack = null;
 		wayBackChunks = List.of();
-		RemoteDimension remote = minecraft.level == null || minecraft.level.dimension() == newDimension ? null : RemoteDimensions.get(newDimension);
-		if (remote == null || remote.center() == null || minecraft.player == null) {
-			return;
-		}
 		// Only a walk through a linked portal, announced by the server, is handed off: a /tp,
 		// death or plugin teleport lands somewhere this view may have no terrain for, and its
 		// placement must be honoured.
 		if (announced == null || !announced.destDimension().equals(newDimension.identifier().toString())) {
 			return;
 		}
+		// The view of the portal walked through: with several portals into this dimension,
+		// another view may be centred somewhere else and lack the chunks you land in.
+		RemoteDimension remote = minecraft.level == null || minecraft.level.dimension() == newDimension ? null : RemoteDimensions.viewFor(announced, newDimension);
+		if (remote == null || remote.center() == null || minecraft.player == null) {
+			return;
+		}
 		RemoteDimensions.Link used = new RemoteDimensions.Link(announced, PortalGeometry.of(announced), newDimension);
 		pendingChunks = remote.snapshotChunks();
 		pendingCenter = remote.center();
+		pendingView = remote;
+		pendingEntities = minecraft.getConnection() == null ? List.of() : remote.snapshotEntities(minecraft.getConnection());
+		previousPlayer = minecraft.player;
 		// The server placed the player from where it last saw them, and the client has kept
 		// moving since; carry the client's own position through the portal instead.
 		PortalGeometry geometry = used.geometry();
@@ -133,11 +169,32 @@ public final class DimensionHandoff {
 		if (chunks.isEmpty() || level == null) {
 			return;
 		}
-		RemoteDimensions.adoptAsBridge(level.dimension());
+		RemoteDimensions.adoptAsBridge(level.dimension(), pendingView);
+		pendingView = null;
 		level.getChunkSource().updateViewCenter(center.x(), center.z());
-		for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
-			listener.handleLevelChunkWithLight(chunk);
+		filling = true;
+		try {
+			for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
+				listener.handleLevelChunkWithLight(chunk);
+			}
+			// Its entities too, so mobs seen through the portal don't vanish until the server
+			// sends them; the server's copies replace these (same ids) when they arrive.
+			for (Packet<ClientGamePacketListener> packet : pendingEntities) {
+				try {
+					packet.handle(listener);
+					if (packet instanceof ClientboundAddEntityPacket add) {
+						seededEntities.add(add.getId());
+					}
+				} catch (RuntimeException ignored) {
+					// an entity that can't be added here simply appears when the server sends it
+				}
+			}
+		} finally {
+			filling = false;
 		}
+		pendingEntities = List.of();
+		seededEntitiesUntil = Util.getMillis() + SEEDED_ENTITY_MS;
+		filledLevel = true;
 		if (wayBack != null) {
 			RemoteDimensions.installArrival(wayBack, wayBackDimension, wayBackChunks);
 		}
@@ -147,6 +204,8 @@ public final class DimensionHandoff {
 		// The new player object starts at the origin and the server's placement may land a
 		// frame later; with no loading screen to hide that, place it now.
 		placeAtArrival();
+		carryOver(previousPlayer, Minecraft.getInstance().player);
+		previousPlayer = null;
 		// The main camera's environment probe (fog, sky and light colours) still holds the old
 		// dimension and blends from it over the next tick; start it fresh in the new one.
 		Minecraft minecraft = Minecraft.getInstance();
@@ -220,7 +279,7 @@ public final class DimensionHandoff {
 		heldXRot = rotation[1];
 		holdThroughPlacement = true;
 
-		RemoteDimension remote = RemoteDimensions.get(level.dimension());
+		RemoteDimension remote = RemoteDimensions.viewFor(announced, level.dimension());
 		if (remote != null && remote.center() != null) {
 			level.getChunkSource().updateViewCenter(remote.center().x(), remote.center().z());
 			for (ClientboundLevelChunkWithLightPacket chunk : remote.snapshotChunks()) {
@@ -228,15 +287,79 @@ public final class DimensionHandoff {
 					listener.handleLevelChunkWithLight(chunk);
 				}
 			}
-			RemoteDimensions.adoptAsBridge(level.dimension());
+			RemoteDimensions.adoptAsBridge(level.dimension(), remote);
 			fadeSuppressedUntil = Util.getMillis() + FADE_SUPPRESS_MS;
 		}
 		return true;
 	}
 
+	/**
+	 * The server added an entity. If a hand-off seeded that very entity, it's kept and moved to
+	 * the server's position instead: replacing it would restart its animation and interpolation,
+	 * a visible flicker. Returns whether the packet is handled.
+	 */
+	public static boolean onServerEntity(ClientboundAddEntityPacket packet) {
+		if (filling || !seededEntities.remove(packet.getId())) {
+			return false;
+		}
+		ClientLevel level = Minecraft.getInstance().level;
+		Entity entity = level == null ? null : level.getEntity(packet.getId());
+		if (entity == null || entity.getType() != packet.getType() || !entity.getUUID().equals(packet.getUUID())) {
+			return false;
+		}
+		entity.moveOrInterpolateTo(new Vec3(packet.getX(), packet.getY(), packet.getZ()), packet.getYRot(), packet.getXRot());
+		entity.lerpHeadTo(packet.getYHeadRot(), 3);
+		entity.setDeltaMovement(packet.getMovement());
+		return true;
+	}
+
+	/** Every client tick: seeded entities the server never sent (outside its range) are removed. */
+	public static void tick(Minecraft minecraft) {
+		if (!seededEntities.isEmpty() && Util.getMillis() > seededEntitiesUntil) {
+			if (minecraft.level != null) {
+				for (int id : seededEntities) {
+					minecraft.level.removeEntity(id, Entity.RemovalReason.DISCARDED);
+				}
+			}
+			seededEntities.clear();
+		}
+	}
+
+	/** A chunk packet is being handled: note it if the server sent it (not a hand-off filling the level). */
+	public static void onServerChunk(ClientboundLevelChunkWithLightPacket packet) {
+		if (!filling) {
+			serverChunks.add(ChunkPos.pack(ClientVersioned.chunkX(packet), ClientVersioned.chunkZ(packet)));
+		}
+	}
+
+	/**
+	 * Whether an unload is left over from the previous level: after a hand-off filled the new
+	 * level, for a chunk the server hasn't sent in it.
+	 */
+	public static boolean isStaleUnload(ChunkPos pos) {
+		return filledLevel && !serverChunks.contains(pos.pack());
+	}
+
 	/** For a moment after arriving, new chunk sections appear at once instead of fading in. */
 	public static boolean suppressChunkFade() {
 		return Util.getMillis() < fadeSuppressedUntil;
+	}
+
+	/**
+	 * The respawn made a new player object: its hand starts lowered, its attack timer at zero
+	 * (so the hand dips) and its inventory empty until the server resends it (so the held item
+	 * re-equips). Start it from the old one's instead; the server's copy replaces it shortly.
+	 */
+	private static void carryOver(LocalPlayer from, LocalPlayer to) {
+		if (from == null || to == null || from == to) {
+			return;
+		}
+		to.getInventory().replaceWith(from.getInventory());
+		to.getInventory().setSelectedSlot(from.getInventory().getSelectedSlot());
+		((LivingEntityAccessor) to).netherview$setAttackStrengthTicker(((LivingEntityAccessor) from).netherview$getAttackStrengthTicker());
+		((LivingEntityAccessor) to).netherview$setItemSwapTicker(((LivingEntityAccessor) from).netherview$getItemSwapTicker());
+		((PlayerAccessor) to).netherview$setLastItemInMainHand(((PlayerAccessor) from).netherview$getLastItemInMainHand());
+		ClientVersioned.carryHands(from, to);
 	}
 
 	private static void placeAtArrival() {

@@ -29,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -58,7 +59,10 @@ public final class RemoteDimensions {
 	private static volatile List<RemoteDimension> published = List.of();
 	private static int bridgeTicks;
 	private static final int BRIDGE_MIN_TICKS = 2;
-	private static final int BRIDGE_MAX_TICKS = 10;
+	/** Longest the bridge is kept (3 s), in case the main renderer never quite matches it. */
+	private static final int BRIDGE_MAX_TICKS = 60;
+	/** Way-back chunks this near the window (in chunks) are lit and meshable on arrival. */
+	private static final int ARRIVAL_NOW_RADIUS = 2;
 	private static StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> entityCodec;
 	private static Object entityCodecRegistries;
 
@@ -78,6 +82,36 @@ public final class RemoteDimensions {
 	}
 
 	/** The primary view of {@code key}, if that dimension has been seen. */
+	/**
+	 * The view showing {@code link}'s far side: the one the renderer gave that portal, else the
+	 * view of {@code key} centred nearest its destination. (Several portals into one dimension
+	 * each have their own view, centred on their own destination.)
+	 */
+	public static RemoteDimension viewFor(PortalLink link, ResourceKey<Level> key) {
+		RemoteDimension assigned = PortalViewRenderer.assignedView(link.min());
+		if (assigned != null && assigned.key == key && !assigned.isClosed()) {
+			return assigned;
+		}
+		List<RemoteDimension> views = VIEWS.get(key);
+		if (views == null || views.isEmpty()) {
+			return null;
+		}
+		ChunkPos dest = ChunkPos.containing(BlockPos.containing(PortalGeometry.center(link.dest())));
+		RemoteDimension nearest = views.getFirst();
+		long best = Long.MAX_VALUE;
+		for (RemoteDimension view : views) {
+			if (view.center() != null) {
+				long dx = view.center().x() - dest.x();
+				long dz = view.center().z() - dest.z();
+				if (dx * dx + dz * dz < best) {
+					best = dx * dx + dz * dz;
+					nearest = view;
+				}
+			}
+		}
+		return nearest;
+	}
+
 	public static RemoteDimension get(ResourceKey<Level> key) {
 		List<RemoteDimension> views = VIEWS.get(key);
 		return views == null || views.isEmpty() ? null : views.getFirst();
@@ -153,22 +187,34 @@ public final class RemoteDimensions {
 		Link link = new Link(back, PortalGeometry.of(back), backDimension);
 		TYPES.put(backDimension, back.destDimensionType());
 		RemoteDimension remote = view(backDimension, 0);
-		remote.centerOn(ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
-		for (ClientboundLevelChunkWithLightPacket chunk : chunks) {
-			remote.acceptChunk(chunk);
+		ChunkPos center = ChunkPos.containing(BlockPos.containing(link.geometry().destCenter()));
+		remote.centerOn(center);
+		// Nearest first, and the chunks right behind the window at once: the player may be
+		// looking straight back through it, and the light queue would hold them for a while.
+		List<ClientboundLevelChunkWithLightPacket> ordered = new ArrayList<>(chunks);
+		ordered.sort(Comparator.comparingInt(chunk -> arrivalDistance(chunk, center)));
+		for (ClientboundLevelChunkWithLightPacket chunk : ordered) {
+			remote.acceptChunk(chunk, arrivalDistance(chunk, center) <= ARRIVAL_NOW_RADIUS);
 		}
 		links = List.of(link);
 		PortalHiding.setLinks(links);
 	}
 
-	/** Keep the primary view of {@code dimension} alive as the bridge while the main renderer meshes the new level. */
-	static void adoptAsBridge(ResourceKey<Level> dimension) {
+	private static int arrivalDistance(ClientboundLevelChunkWithLightPacket chunk, ChunkPos center) {
+		return Math.max(Math.abs(ClientVersioned.chunkX(chunk) - center.x()), Math.abs(ClientVersioned.chunkZ(chunk) - center.z()));
+	}
+
+	/** Keep {@code view} (one of {@code dimension}'s) alive as the bridge while the main renderer meshes the new level. */
+	static void adoptAsBridge(ResourceKey<Level> dimension, RemoteDimension view) {
 		List<RemoteDimension> views = VIEWS.remove(dimension);
-		if (views == null || views.isEmpty()) {
+		if (views == null || !views.remove(view)) {
+			if (views != null) {
+				views.forEach(RemoteDimension::close);
+			}
 			return;
 		}
 		closeBridge();
-		bridge = views.removeFirst();
+		bridge = view;
 		bridgeTicks = 0;
 		PortalViewRenderer.forgetRemotes();
 		views.forEach(RemoteDimension::close);
@@ -290,10 +336,13 @@ public final class RemoteDimensions {
 		if (bridge != null) {
 			bridge.tick(minecraft.level);
 			bridgeTicks++;
-			// The bridge doubles the frame's cost, so it ends as soon as the main renderer has
-			// meshed what it was given (fade-in is off right after a hand-off, so nothing is half-drawn).
+			// The bridge doubles the frame's cost, so it ends as soon as the main renderer draws
+			// (nearly) as much as the bridge does: fade-in is off right after a hand-off, so
+			// nothing is half-drawn. The compile queue alone says nothing early on: it's empty
+			// until the new level's sections are found visible and scheduled.
 			boolean caughtUp = bridgeTicks >= BRIDGE_MIN_TICKS
 					&& ClientVersioned.isSectionCompiledAndVisible(minecraft.levelRenderer, ClientVersioned.mainCamera().blockPosition())
+					&& ClientVersioned.mainRenderedSections() * 10 >= bridge.renderer.renderedSections() * 9
 					&& minecraft.levelRenderer.hasRenderedAllSections();
 			if (caughtUp || bridgeTicks >= BRIDGE_MAX_TICKS || bridge.level.dimension() != minecraft.level.dimension()) {
 				closeBridge();
@@ -331,7 +380,11 @@ public final class RemoteDimensions {
 		List<RemoteDimension> all = allViews();
 		Set<ClientLevel> levels = new HashSet<>();
 		for (RemoteDimension view : all) {
-			levels.add(view.level);
+			// The bridge stands in for the level the player has just entered, so its portals
+			// are hidden as the player's are (the way back included), not as a remote view's.
+			if (view != bridge) {
+				levels.add(view.level);
+			}
 		}
 		published = List.copyOf(all);
 		PortalHiding.setRemoteLevels(levels);

@@ -129,6 +129,11 @@ public final class PortalViewRenderer {
 	/** Which view each live portal (by its lowest block) used last frame, so it keeps its meshes and visibility. */
 	private static Map<BlockPos, RemoteDimension> assignments = new HashMap<>();
 
+	/** The view the portal at {@code min} was last drawn with, if any. */
+	static RemoteDimension assignedView(BlockPos min) {
+		return assignments.get(min);
+	}
+
 	private static Link activeLink;
 	private static RemoteDimension bridgeRendered;
 	/** Set once the camera has passed through a linked portal and until the dimension actually changes. */
@@ -218,7 +223,7 @@ public final class PortalViewRenderer {
 		for (Link link : RemoteDimensions.links()) {
 			// End portals are fallen into feet first: the server moves the player before the
 			// camera reaches the surface, so there is no crossing to preview.
-			if (!link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.get(link.dest()) != null) {
+			if (!link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
 				crossedLink = link;
 				crossedAt = Util.getMillis();
 				return;
@@ -229,7 +234,7 @@ public final class PortalViewRenderer {
 	/** Through the portal: the far side, from the carried-through camera, with no clip plane (it would be behind us). */
 	private static void renderCrossed(Minecraft minecraft, Camera main, Matrix4f levelProjection) {
 		Link link = crossedLink;
-		RemoteDimension remote = RemoteDimensions.get(link.dest());
+		RemoteDimension remote = RemoteDimensions.viewFor(link.link(), link.dest());
 		if (remote == null) {
 			return;
 		}
@@ -719,7 +724,7 @@ public final class PortalViewRenderer {
 
 	/** The far side's fog colour, from whichever view of it last rendered, or a per-dimension guess. */
 	private static Vector4f cardColor(Link link) {
-		RemoteDimension view = RemoteDimensions.get(link.dest());
+		RemoteDimension view = RemoteDimensions.viewFor(link.link(), link.dest());
 		if (view != null && view.renderState.cameraRenderState.fogData != null) {
 			Vector4f fog = view.renderState.cameraRenderState.fogData.color;
 			return new Vector4f(fog.x, fog.y, fog.z, 1.0F);

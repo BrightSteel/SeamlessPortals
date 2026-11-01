@@ -31,6 +31,8 @@ public final class ClientConfig {
 	public int remoteRenderDistance = 8;
 	/** Portals wider or taller than this (portal blocks) are left as vanilla portals on this client. */
 	public int maxPortalSize = 21;
+	/** Share of vanilla's swirl particles a linked portal keeps (1 = all, 0 = none); unlinked portals keep all. */
+	public double portalParticles = 0.25;
 
 	/** {@link #maxLivePortals}, unless a perf-mode dev override is set. */
 	public int effectiveMaxLivePortals() {
@@ -76,6 +78,7 @@ public final class ClientConfig {
 		config.liveViewDistance = Math.clamp(config.liveViewDistance, 0.0, 256.0);
 		config.remoteRenderDistance = Math.clamp(config.remoteRenderDistance, 2, 32);
 		config.maxPortalSize = Math.clamp(config.maxPortalSize, 2, 21);
+		config.portalParticles = Math.clamp(config.portalParticles, 0.0, 1.0);
 		return config;
 	}
 }

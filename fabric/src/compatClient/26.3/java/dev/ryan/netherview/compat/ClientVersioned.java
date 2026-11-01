@@ -167,6 +167,28 @@ public final class ClientVersioned {
 		return Minecraft.getInstance().gameRenderer.gameRenderState();
 	}
 
+	/** Carries the first-person hand animation state over to the player object a respawn created. */
+	public static void carryHands(net.minecraft.client.player.LocalPlayer from, net.minecraft.client.player.LocalPlayer to) {
+		// The first-person hand state lives on the player object here: copy it field by field.
+		try {
+			Object source = from.firstPersonHandsAndItems();
+			Object target = to.firstPersonHandsAndItems();
+			for (java.lang.reflect.Field field : source.getClass().getDeclaredFields()) {
+				if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+					field.setAccessible(true);
+					field.set(target, field.get(source));
+				}
+			}
+		} catch (ReflectiveOperationException | RuntimeException ignored) {
+			// cosmetic only: the hand re-equips as vanilla would
+		}
+	}
+
+	/** Visible sections of the player's own level with something to draw. */
+	public static int mainRenderedSections() {
+		return Minecraft.getInstance().levelExtractor.countRenderedSections();
+	}
+
 	/** Re-mesh a block in the player's own level. */
 	public static void markMainBlockDirty(BlockPos pos) {
 		Minecraft.getInstance().levelExtractor.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());

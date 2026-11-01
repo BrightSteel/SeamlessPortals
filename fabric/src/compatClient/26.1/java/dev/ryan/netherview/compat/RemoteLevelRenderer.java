@@ -77,6 +77,11 @@ public final class RemoteLevelRenderer {
 		this.renderer.onChunkReadyToRender(pos);
 	}
 
+	/** Visible sections with something to draw. */
+	public int renderedSections() {
+		return this.renderer.countRenderedSections();
+	}
+
 	public SectionOcclusionGraph sectionOcclusionGraph() {
 		return this.renderer.getSectionOcclusionGraph();
 	}

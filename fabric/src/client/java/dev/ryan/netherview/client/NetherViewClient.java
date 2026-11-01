@@ -24,6 +24,7 @@ public class NetherViewClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(RemoteChunkPayload.TYPE, (payload, context) -> RemoteDimensions.onChunk(payload));
 		ClientPlayNetworking.registerGlobalReceiver(RemoteEntitiesPayload.TYPE, (payload, context) -> RemoteDimensions.onEntities(payload));
 		ClientTickEvents.END_CLIENT_TICK.register(RemoteDimensions::tick);
+		ClientTickEvents.END_CLIENT_TICK.register(DimensionHandoff::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> RemoteDimensions.clear());
 	}
 }
