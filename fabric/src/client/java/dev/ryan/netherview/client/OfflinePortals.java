@@ -64,6 +64,9 @@ public final class OfflinePortals {
 	private static final ArrayDeque<Snapshot> snapshots = new ArrayDeque<>();
 	private static List<PortalLink> shown = List.of();
 	private static ClientLevel shownIn;
+	/** Whether the player has stood outside every portal since arriving in {@link #steppedOutIn}. */
+	private static boolean steppedOut;
+	private static ClientLevel steppedOutIn;
 	private static int ticks;
 
 	private OfflinePortals() {
@@ -87,6 +90,8 @@ public final class OfflinePortals {
 		snapshots.clear();
 		shown = List.of();
 		shownIn = null;
+		steppedOut = false;
+		steppedOutIn = null;
 	}
 
 	private static List<Recorded> recorded() {
@@ -107,7 +112,9 @@ public final class OfflinePortals {
 		if (!active()) {
 			return null;
 		}
-		PortalEnd source = portalAt(level, player.getBoundingBox());
+		// Vanilla never sends a player back through the portal they arrived in until they've
+		// stepped out of it: leaving from there is a command or plugin teleport, not this portal.
+		PortalEnd source = level == steppedOutIn && steppedOut ? portalAt(level, player.getBoundingBox()) : null;
 		if (source == null) {
 			pending = null;
 			return null;
@@ -145,6 +152,13 @@ public final class OfflinePortals {
 				RemoteDimensions.setOfflineLinks(shown);
 			}
 			return;
+		}
+		if (level != steppedOutIn) {
+			steppedOutIn = level;
+			steppedOut = false;
+		}
+		if (!steppedOut && portalAt(level, player.getBoundingBox()) == null) {
+			steppedOut = true;
 		}
 		if (pending != null) {
 			findArrival(level, player);

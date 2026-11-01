@@ -91,8 +91,15 @@ public final class PortalViewRenderer {
 	private static final double WINDOW_DEPTH = 0.1;
 	/** The portal surface over a view sits this far in front of the window (blocks), clear of its depth. */
 	private static final double SWIRL_OFFSET = 0.01;
+	/** Vanilla's end portal textures: the backdrop and the star layers its shader scrolls. */
+	private static final Identifier END_SKY_TEXTURE = Identifier.withDefaultNamespace("textures/environment/end_sky.png");
 	private static final Identifier END_PORTAL_TEXTURE = Identifier.withDefaultNamespace("textures/entity/end_portal/end_portal.png");
-	private static final Vector3f END_STAR_TINT = new Vector3f(0.3F, 0.75F, 0.7F);
+	/** How far in front of the eye the in-portal surface sits (blocks): past the 0.05 near plane. */
+	private static final float FULLSCREEN_SURFACE_DISTANCE = 0.1F;
+	/** A live view's surface fades out over this distance from the portal plane (blocks), gone as you walk through. */
+	private static final double STREAMED_SURFACE_FADE = 1.0;
+	/** Within this distance of the plane (blocks), an eye inside the opening sees the surface over the whole screen. */
+	private static final double INSIDE_PORTAL_DEPTH = 0.4;
 	/** Keeps the oblique near plane from passing through the remote camera when standing in a portal. */
 	private static final double MIN_CLIP_DISTANCE = 0.05;
 
@@ -112,6 +119,10 @@ public final class PortalViewRenderer {
 
 	private static final RenderPipeline TEXTURED_CARD_PIPELINE = ClientVersioned.pipeline("pipeline/portal_card_tex",
 			id("core/portal_card_tex"), id("core/portal_card_tex"), true, DefaultVertexFormat.POSITION_TEX, 1, false, true, false);
+
+	/** The end portal's starfield (vanilla's shader, made translucent) on a card. */
+	private static final RenderPipeline STARFIELD_CARD_PIPELINE = ClientVersioned.pipeline("pipeline/portal_card_end",
+			id("core/portal_card_end"), id("core/portal_card_end"), true, DefaultVertexFormat.POSITION_TEX, 2, false, true, false);
 
 	private static final RenderPipeline CARD_PIPELINE = ClientVersioned.pipeline("pipeline/portal_card",
 			id("core/portal_view"), id("core/portal_card"), true, DefaultVertexFormat.POSITION, 0, false, false, false);
@@ -859,14 +870,30 @@ public final class PortalViewRenderer {
 			return;
 		}
 		ClientConfig config = ClientConfig.get();
+		Vec3 eye = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState.pos;
 		for (Pass pass : passes) {
 			drawWindow(pass.link(), pass.view(), null);
 			// The portal's own surface over the view, as translucent as configured. By default only
 			// a remembered view (frozen, without mobs) gets it: it reads as a glimpse, and as a
 			// portal you wait in rather than walk through.
-			double opacity = pass.link().offline() ? config.offlinePortalOpacity : config.streamedPortalOpacity;
-			if (opacity > 0.0 && pass.link().link().source().fill() != PortalFill.NONE) {
-				drawTexturedCard(pass.link(), (float) opacity, SWIRL_OFFSET);
+			Link link = pass.link();
+			double opacity = link.offline() ? config.offlinePortalOpacity : config.streamedPortalOpacity;
+			if (opacity <= 0.0 || link.link().source().fill() == PortalFill.NONE) {
+				continue;
+			}
+			double depth = Math.abs(eye.subtract(link.geometry().sourceCenter()).dot(link.geometry().sourceNormal()));
+			boolean inOpening = insideOpening(link, eye);
+			if (!link.offline() && inOpening) {
+				// Walked through, not waited in: the surface thins out to nothing at the plane.
+				opacity *= Math.min(1.0, depth / STREAMED_SURFACE_FADE);
+			}
+			if (opacity <= 0.0) {
+				continue;
+			}
+			if (link.offline() && inOpening && depth < INSIDE_PORTAL_DEPTH) {
+				drawSurfaceFullscreen(link, (float) opacity);
+			} else {
+				drawTexturedCard(link, (float) opacity, SWIRL_OFFSET);
 			}
 		}
 		// Over-budget portals look like their fill: the swirl, water or lava from the block atlas,
@@ -972,18 +999,72 @@ public final class PortalViewRenderer {
 		}
 	}
 
+	/** Whether {@code eye}, seen along the portal's normal, is within its opening. */
+	private static boolean insideOpening(Link link, Vec3 eye) {
+		Vec3[] corners = link.geometry().sourceCorners(eye, 0.0);
+		Vec3 across = corners[1].subtract(corners[0]);
+		Vec3 along = corners[3].subtract(corners[0]);
+		Vec3 rel = eye.subtract(corners[0]);
+		double a = rel.dot(across) / across.lengthSqr();
+		double b = rel.dot(along) / along.lengthSqr();
+		return a >= 0.0 && a <= 1.0 && b >= 0.0 && b <= 1.0;
+	}
+
 	/** A culled portal drawn as its fill: one quad per block on the portal plane, with the fill's (animated) sprite. */
 	private static void drawTexturedCard(Link link, float alpha, double offset) {
+		CameraRenderState mainCamera = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState;
+		Vec3 eye = mainCamera.pos;
+		PortalEnd end = link.link().source();
+		Vec3[] corners = link.geometry().sourceCorners(eye, offset);
+		Vec3 origin = corners[0].subtract(eye);
+		Vec3 right = corners[1].subtract(corners[0]).scale(1.0 / end.width());
+		Vec3 up = corners[3].subtract(corners[0]).scale(1.0 / end.height());
+		List<Vec3[]> quads = new ArrayList<>();
+		for (int i = 0; i < end.width(); i++) {
+			for (int j = 0; j < end.height(); j++) {
+				Vec3 p00 = origin.add(right.scale(i)).add(up.scale(j));
+				quads.add(new Vec3[] {p00, p00.add(right), p00.add(right).add(up), p00.add(up)});
+			}
+		}
+		drawSurface(link, alpha, quads, "netherview portal card");
+	}
+
+	/**
+	 * The fill over the whole screen, for an eye inside the opening (where a card on the plane
+	 * would be behind it or cut by the near plane): one quad just in front of the camera,
+	 * covering its view, as vanilla's own in-portal overlay does.
+	 */
+	private static void drawSurfaceFullscreen(Link link, float alpha) {
+		CameraRenderState mainCamera = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState;
+		Matrix4f unproject = new Matrix4f(mainCamera.projectionMatrix).mul(mainCamera.viewRotationMatrix).invert();
+		Vector3f forward = unproject.transformProject(new Vector3f(0.0F, 0.0F, 0.5F)).normalize();
+		Vec3[] corner = new Vec3[4];
+		float[][] ndc = {{-1.0F, -1.0F}, {1.0F, -1.0F}, {1.0F, 1.0F}, {-1.0F, 1.0F}};
+		for (int k = 0; k < 4; k++) {
+			Vector3f ray = unproject.transformProject(new Vector3f(ndc[k][0], ndc[k][1], 0.5F)).normalize();
+			ray.mul(FULLSCREEN_SURFACE_DISTANCE / ray.dot(forward));
+			corner[k] = new Vec3(ray.x, ray.y, ray.z);
+		}
+		drawSurface(link, alpha, List.<Vec3[]>of(corner), "netherview portal surface");
+	}
+
+	/**
+	 * Draws {@code quads} (camera-relative corners, counter-clockwise from bottom left) with the
+	 * fill of {@code link}'s portal: the swirl, water or lava sprite stretched over each quad, or
+	 * for end portals and gateways vanilla's moving starfield, projected on the screen as vanilla
+	 * draws it.
+	 */
+	private static void drawSurface(Link link, float alpha, List<Vec3[]> quads, String label) {
 		Minecraft minecraft = Minecraft.getInstance();
 		PortalFill fill = link.link().source().fill();
 		boolean starfield = fill == PortalFill.END_PORTAL || fill == PortalFill.END_GATEWAY;
 		AbstractTexture texture;
+		AbstractTexture stars = null;
 		float u0 = 0.0F, u1 = 1.0F, v0 = 0.0F, v1 = 1.0F;
 		Vector4f tint = new Vector4f(1.0F, 1.0F, 1.0F, alpha);
 		if (starfield) {
-			// The starfield's dots, tinted as the end portal shader's first layers: dark with teal stars.
-			texture = minecraft.getTextureManager().getTexture(END_PORTAL_TEXTURE);
-			tint.set(END_STAR_TINT.x, END_STAR_TINT.y, END_STAR_TINT.z, alpha);
+			texture = minecraft.getTextureManager().getTexture(END_SKY_TEXTURE);
+			stars = minecraft.getTextureManager().getTexture(END_PORTAL_TEXTURE);
 		} else {
 			TextureAtlas atlas = (TextureAtlas) minecraft.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
 			TextureAtlasSprite sprite = atlas.getSprite(Identifier.withDefaultNamespace(switch (fill) {
@@ -1002,42 +1083,32 @@ public final class PortalViewRenderer {
 			tint.set((rgb >> 16 & 0xFF) / 255.0F, (rgb >> 8 & 0xFF) / 255.0F, (rgb & 0xFF) / 255.0F, alpha);
 		}
 
-		GameRenderer gameRenderer = minecraft.gameRenderer;
 		RenderTarget mainTarget = ClientVersioned.mainRenderTarget();
 		CameraRenderState mainCamera = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState;
-		Vec3 eye = mainCamera.pos;
-		PortalEnd end = link.link().source();
-		Vec3[] corners = link.geometry().sourceCorners(eye, offset);
-		Vec3 origin = corners[0].subtract(eye);
-		Vec3 right = corners[1].subtract(corners[0]).scale(1.0 / end.width());
-		Vec3 up = corners[3].subtract(corners[0]).scale(1.0 / end.height());
-		int vertexCount = end.width() * end.height() * 6;
+		int vertexCount = quads.size() * 6;
 		try (ByteBufferBuilder bytes = ByteBufferBuilder.exactlySized(DefaultVertexFormat.POSITION_TEX.getVertexSize() * vertexCount)) {
 			BufferBuilder builder = ClientVersioned.triangles(bytes, DefaultVertexFormat.POSITION_TEX);
-			for (int i = 0; i < end.width(); i++) {
-				for (int j = 0; j < end.height(); j++) {
-					Vec3 p00 = origin.add(right.scale(i)).add(up.scale(j));
-					Vec3 p10 = p00.add(right);
-					Vec3 p11 = p10.add(up);
-					Vec3 p01 = p00.add(up);
-					cardVertex(builder, p00, u0, v1);
-					cardVertex(builder, p10, u1, v1);
-					cardVertex(builder, p11, u1, v0);
-					cardVertex(builder, p00, u0, v1);
-					cardVertex(builder, p11, u1, v0);
-					cardVertex(builder, p01, u0, v0);
-				}
+			for (Vec3[] quad : quads) {
+				cardVertex(builder, quad[0], u0, v1);
+				cardVertex(builder, quad[1], u1, v1);
+				cardVertex(builder, quad[2], u1, v0);
+				cardVertex(builder, quad[0], u0, v1);
+				cardVertex(builder, quad[2], u1, v0);
+				cardVertex(builder, quad[3], u0, v0);
 			}
 			try (MeshData mesh = builder.buildOrThrow()) {
-				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> "netherview portal card", GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
+				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> label, GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
 				try {
 					GpuBufferSlice transforms = ClientVersioned.transform(new Matrix4f(mainCamera.viewRotationMatrix), tint);
 					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
-					try (RenderPass pass = ClientVersioned.renderPass(() -> "netherview portal card", mainTarget)) {
-						ClientVersioned.setPipeline(pass, TEXTURED_CARD_PIPELINE);
+					try (RenderPass pass = ClientVersioned.renderPass(() -> label, mainTarget)) {
+						ClientVersioned.setPipeline(pass, starfield ? STARFIELD_CARD_PIPELINE : TEXTURED_CARD_PIPELINE);
 						RenderSystem.bindDefaultUniforms(pass);
 						pass.setUniform("DynamicTransforms", transforms);
 						ClientVersioned.bindTexture(pass, "Sampler0", texture.getTextureView(), texture.getSampler());
+						if (stars != null) {
+							ClientVersioned.bindTexture(pass, "Sampler1", stars.getTextureView(), stars.getSampler());
+						}
 						ClientVersioned.drawVertices(pass, vertices, vertexCount);
 					}
 				} finally {
