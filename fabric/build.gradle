@@ -89,10 +89,20 @@ if (importMap.exists()) {
 	tasks.named('compileClientJava') { dependsOn rewriteClientImports }
 }
 
+repositories {
+	maven {
+		name = 'TerraformersMC'
+		url = 'https://maven.terraformersmc.com/releases/'
+	}
+}
+
 dependencies {
 	minecraft "com.mojang:minecraft:${mcProps.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${mcProps.fabric_api_version}"
+	// Optional: with Mod Menu installed, its list opens the client settings screen.
+	compileOnly("com.terraformersmc:modmenu:${mcProps.modmenu_version}") { transitive = false }
+	localRuntime("com.terraformersmc:modmenu:${mcProps.modmenu_version}") { transitive = false }
 }
 
 processResources {

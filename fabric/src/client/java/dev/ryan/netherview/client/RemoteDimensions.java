@@ -61,6 +61,8 @@ public final class RemoteDimensions {
 	/** Every view, bridge included, as last published: mixins ask from worker threads too (26.1's culling graph). */
 	private static volatile List<RemoteDimension> published = List.of();
 	private static int bridgeTicks;
+	/** Remembered chunks loaded into a view per tick (see {@link OfflinePortals}). */
+	private static final int SEED_CHUNKS_PER_TICK = 24;
 	/**
 	 * A view of the player's own dimension around a portal they're backing into, built ahead
 	 * so it can become the window back on arrival already meshed; see {@link #prepareWayBack}.
@@ -85,8 +87,14 @@ public final class RemoteDimensions {
 	private static StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> entityCodec;
 	private static Object entityCodecRegistries;
 
-	/** A link plus the dimension it leads into, resolved once when the server sends it. */
-	public record Link(PortalLink link, PortalGeometry geometry, ResourceKey<Level> dest) {
+	/**
+	 * A link plus the dimension it leads into, resolved once when the server sends it.
+	 * {@code offline}: a trip recorded on a server without the server half (see {@link OfflinePortals}).
+	 */
+	public record Link(PortalLink link, PortalGeometry geometry, ResourceKey<Level> dest, boolean offline) {
+		public Link(PortalLink link, PortalGeometry geometry, ResourceKey<Level> dest) {
+			this(link, geometry, dest, false);
+		}
 	}
 
 	private RemoteDimensions() {
@@ -161,6 +169,7 @@ public final class RemoteDimensions {
 				view.seedFrom(sibling);
 			}
 		}
+		OfflinePortals.seed(view);
 	}
 
 	/** Re-mesh these positions in every remote view (portal hiding changed there). */
@@ -442,20 +451,30 @@ public final class RemoteDimensions {
 	}
 
 	public static void onLinks(PortalLinksPayload payload) {
+		OfflinePortals.pluginSeen();
+		setLinks(payload.links(), false);
+	}
+
+	/** The trips recorded through portals near the player, on a server without the server half. */
+	static void setOfflineLinks(List<PortalLink> recorded) {
+		setLinks(recorded, true);
+	}
+
+	private static void setLinks(List<PortalLink> portals, boolean offline) {
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.level == null) {
 			return;
 		}
 		syncLevel(minecraft);
 		List<Link> resolved = new ArrayList<>();
-		for (PortalLink link : payload.links()) {
+		for (PortalLink link : portals) {
 			ResourceKey<Level> dest = ResourceKey.create(Registries.DIMENSION, Identifier.parse(link.destDimension()));
 			int maxSize = ClientConfig.get().maxPortalSize;
 			if (link.width() > maxSize || link.height() > maxSize) {
 				continue; // too big for this client: left as a vanilla portal
 			}
 			TYPES.put(dest, link.destDimensionType());
-			resolved.add(new Link(link, PortalGeometry.of(link), dest));
+			resolved.add(new Link(link, PortalGeometry.of(link), dest, offline));
 		}
 		links = List.copyOf(resolved);
 		PortalHiding.setLinks(links);
@@ -464,12 +483,13 @@ public final class RemoteDimensions {
 			Link nearest = resolved.getFirst();
 			RemoteDimension primary = view(nearest.dest(), 0);
 			if (primary.center() == null) {
-				primary.centerOn(ChunkPos.containing(BlockPos.containing(nearest.geometry().destCenter())));
+				recenter(primary, ChunkPos.containing(BlockPos.containing(nearest.geometry().destCenter())));
 			}
 		}
 	}
 
 	public static void onChunk(RemoteChunkPayload payload) {
+		OfflinePortals.pluginSeen();
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.level == null || minecraft.getConnection() == null) {
 			return;
@@ -491,6 +511,7 @@ public final class RemoteDimensions {
 	}
 
 	public static void onEntities(RemoteEntitiesPayload payload) {
+		OfflinePortals.pluginSeen();
 		Minecraft minecraft = Minecraft.getInstance();
 		ClientPacketListener connection = minecraft.getConnection();
 		if (minecraft.level == null || connection == null) {
@@ -539,9 +560,14 @@ public final class RemoteDimensions {
 		if (minecraft.level == null) {
 			return;
 		}
+		OfflinePortals.tick(minecraft);
+		ClientPacketListener connection = minecraft.getConnection();
 		for (RemoteDimension view : allViews()) {
 			if (view != bridge) {
 				view.tick(minecraft.level);
+			}
+			if (connection != null) {
+				view.seedFromCache(connection, SEED_CHUNKS_PER_TICK);
 			}
 		}
 		RemoteClocks.tick(minecraft.level.getGameTime());
@@ -572,6 +598,7 @@ public final class RemoteDimensions {
 
 	/** Everything, bridge included (disconnect). */
 	public static void clear() {
+		OfflinePortals.clear();
 		RemoteClocks.clear();
 		closeBridge();
 		closePrepared();

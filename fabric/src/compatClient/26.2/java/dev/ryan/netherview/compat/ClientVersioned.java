@@ -38,6 +38,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.ryan.netherview.client.mixin.MainRenderTargetAccessor;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.state.GameRenderState;
@@ -93,6 +94,10 @@ public final class ClientVersioned {
 
 	public static void bindTexture(RenderPass pass, String name, GpuTextureView view, GpuSampler sampler) {
 		pass.bindTexture(name, view, sampler);
+	}
+
+	public static void setScreen(Minecraft minecraft, Screen screen) {
+		minecraft.gui.setScreen(screen);
 	}
 
 	/** An offscreen colour + depth target. */

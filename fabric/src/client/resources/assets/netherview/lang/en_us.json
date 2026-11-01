@@ -1,0 +1,23 @@
+{
+	"netherview.config.title": "NetherView Settings",
+	"netherview.config.blocks": "%s blocks",
+	"netherview.config.chunks": "%s chunks",
+	"netherview.config.maxLivePortals": "Live Portals",
+	"netherview.config.maxLivePortals.tooltip": "Portals that show the other side live each frame (nearest first). Each one is an extra world render; the rest show a flat card.",
+	"netherview.config.liveViewDistance": "Live View Range",
+	"netherview.config.liveViewDistance.tooltip": "Portals farther away than this only show a flat card.",
+	"netherview.config.remoteRenderDistance": "Render Distance",
+	"netherview.config.remoteRenderDistance.tooltip": "How far you see through a portal. Never more than your own render distance.",
+	"netherview.config.maxPortalSize": "Max Portal Size",
+	"netherview.config.maxPortalSize.tooltip": "Portals wider or taller than this stay normal portals.",
+	"netherview.config.portalParticles": "Portal Particles",
+	"netherview.config.portalParticles.tooltip": "Share of the swirl particles a see-through portal keeps.",
+	"netherview.config.streamedPortalOpacity": "Live Portal Opacity",
+	"netherview.config.streamedPortalOpacity.tooltip": "How strongly the portal's swirl or starfield shows over a live view. 0% is a clear window.",
+	"netherview.config.offlinePreviews": "Offline Previews",
+	"netherview.config.offlinePreviews.tooltip": "On servers without NetherView: portals you've been through show the far side as you last saw it, and the trip skips the loading screen.",
+	"netherview.config.offlinePortalOpacity": "Offline Portal Opacity",
+	"netherview.config.offlinePortalOpacity.tooltip": "How strongly the portal's swirl or starfield shows over an offline preview. 0% is a clear window.",
+	"netherview.config.offlineCacheMb": "Offline Cache",
+	"netherview.config.offlineCacheMb.tooltip": "Disk space for remembered chunks, per server. The least recently used go first."
+}

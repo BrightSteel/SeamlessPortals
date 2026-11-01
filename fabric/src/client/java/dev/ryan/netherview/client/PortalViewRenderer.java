@@ -15,6 +15,7 @@ import com.mojang.renderpearl.api.commands.RenderPass;
 import dev.ryan.netherview.net.PortalEnd;
 import dev.ryan.netherview.net.PortalFill;
 import net.minecraft.client.renderer.BiomeColors;
+import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
@@ -88,6 +89,10 @@ public final class PortalViewRenderer {
 	private static final double PORTAL_PLANE_OFFSET = 0.0;
 	/** Depth of the window box behind the opening; well past the camera's 0.05 near plane. */
 	private static final double WINDOW_DEPTH = 0.1;
+	/** The portal surface over a view sits this far in front of the window (blocks), clear of its depth. */
+	private static final double SWIRL_OFFSET = 0.01;
+	private static final Identifier END_PORTAL_TEXTURE = Identifier.withDefaultNamespace("textures/entity/end_portal/end_portal.png");
+	private static final Vector3f END_STAR_TINT = new Vector3f(0.3F, 0.75F, 0.7F);
 	/** Keeps the oblique near plane from passing through the remote camera when standing in a portal. */
 	private static final double MIN_CLIP_DISTANCE = 0.05;
 
@@ -266,7 +271,9 @@ public final class PortalViewRenderer {
 			}
 			// End portals are fallen into feet first: the server moves the player before the
 			// camera reaches the surface, so there is no crossing to preview.
-			if (!link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
+			// A recorded portal (no server half) keeps vanilla travel: the server won't move a player
+			// for walking through, so there's no crossing to preview.
+			if (!link.offline() && !link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
 				crossedLink = link;
 				crossedAt = Util.getMillis();
 				return;
@@ -403,7 +410,8 @@ public final class PortalViewRenderer {
 		if (nearest != null) {
 			Link link = nearest;
 			// Prepared from a way off: its first render is a stall, better not right at the portal.
-			RemoteDimension back = RemoteDimensions.prepareWayBack(link);
+			// No way back is shown after a recorded trip (only a recorded trip back would show one).
+			RemoteDimension back = link.offline() ? null : RemoteDimensions.prepareWayBack(link);
 			RemoteDimension remote = RemoteDimensions.viewFor(link.link(), link.dest());
 			// Even with its window on screen: what a window shows is only what lies within it,
 			// and a sliver of window (backing in, looking down) meshes next to nothing.
@@ -850,15 +858,23 @@ public final class PortalViewRenderer {
 			drawWindow(crossed, left, null);
 			return;
 		}
+		ClientConfig config = ClientConfig.get();
 		for (Pass pass : passes) {
 			drawWindow(pass.link(), pass.view(), null);
+			// The portal's own surface over the view, as translucent as configured. By default only
+			// a remembered view (frozen, without mobs) gets it: it reads as a glimpse, and as a
+			// portal you wait in rather than walk through.
+			double opacity = pass.link().offline() ? config.offlinePortalOpacity : config.streamedPortalOpacity;
+			if (opacity > 0.0 && pass.link().link().source().fill() != PortalFill.NONE) {
+				drawTexturedCard(pass.link(), (float) opacity, SWIRL_OFFSET);
+			}
 		}
 		// Over-budget portals look like their fill: the swirl, water or lava from the block atlas,
 		// or for end portal and gateway fills the vanilla starfield, simply left unhidden.
 		Set<BlockPos> unhiddenEnds = new HashSet<>();
 		for (Link card : cards) {
 			switch (card.link().source().fill()) {
-				case NETHER_PORTAL, WATER, LAVA -> drawTexturedCard(card);
+				case NETHER_PORTAL, WATER, LAVA -> drawTexturedCard(card, 1.0F, PORTAL_PLANE_OFFSET);
 				case END_PORTAL, END_GATEWAY -> card.geometry().sourceBlocks().forEach(pos -> unhiddenEnds.add(pos.immutable()));
 				case NONE -> drawWindow(card, (RenderTarget) null, cardColor(card));
 			}
@@ -957,19 +973,33 @@ public final class PortalViewRenderer {
 	}
 
 	/** A culled portal drawn as its fill: one quad per block on the portal plane, with the fill's (animated) sprite. */
-	private static void drawTexturedCard(Link link) {
+	private static void drawTexturedCard(Link link, float alpha, double offset) {
 		Minecraft minecraft = Minecraft.getInstance();
 		PortalFill fill = link.link().source().fill();
-		TextureAtlas atlas = (TextureAtlas) minecraft.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
-		TextureAtlasSprite sprite = atlas.getSprite(Identifier.withDefaultNamespace(switch (fill) {
-			case WATER -> "block/water_still";
-			case LAVA -> "block/lava_still";
-			default -> "block/nether_portal";
-		}));
-		Vector4f tint = new Vector4f(1.0F, 1.0F, 1.0F, 1.0F);
+		boolean starfield = fill == PortalFill.END_PORTAL || fill == PortalFill.END_GATEWAY;
+		AbstractTexture texture;
+		float u0 = 0.0F, u1 = 1.0F, v0 = 0.0F, v1 = 1.0F;
+		Vector4f tint = new Vector4f(1.0F, 1.0F, 1.0F, alpha);
+		if (starfield) {
+			// The starfield's dots, tinted as the end portal shader's first layers: dark with teal stars.
+			texture = minecraft.getTextureManager().getTexture(END_PORTAL_TEXTURE);
+			tint.set(END_STAR_TINT.x, END_STAR_TINT.y, END_STAR_TINT.z, alpha);
+		} else {
+			TextureAtlas atlas = (TextureAtlas) minecraft.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+			TextureAtlasSprite sprite = atlas.getSprite(Identifier.withDefaultNamespace(switch (fill) {
+				case WATER -> "block/water_still";
+				case LAVA -> "block/lava_still";
+				default -> "block/nether_portal";
+			}));
+			texture = atlas;
+			u0 = sprite.getU0();
+			u1 = sprite.getU1();
+			v0 = sprite.getV0();
+			v1 = sprite.getV1();
+		}
 		if (fill == PortalFill.WATER && minecraft.level != null) {
 			int rgb = BiomeColors.getAverageWaterColor(minecraft.level, BlockPos.containing(link.geometry().sourceCenter()));
-			tint.set((rgb >> 16 & 0xFF) / 255.0F, (rgb >> 8 & 0xFF) / 255.0F, (rgb & 0xFF) / 255.0F, 1.0F);
+			tint.set((rgb >> 16 & 0xFF) / 255.0F, (rgb >> 8 & 0xFF) / 255.0F, (rgb & 0xFF) / 255.0F, alpha);
 		}
 
 		GameRenderer gameRenderer = minecraft.gameRenderer;
@@ -977,7 +1007,7 @@ public final class PortalViewRenderer {
 		CameraRenderState mainCamera = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState;
 		Vec3 eye = mainCamera.pos;
 		PortalEnd end = link.link().source();
-		Vec3[] corners = link.geometry().sourceCorners(eye, PORTAL_PLANE_OFFSET);
+		Vec3[] corners = link.geometry().sourceCorners(eye, offset);
 		Vec3 origin = corners[0].subtract(eye);
 		Vec3 right = corners[1].subtract(corners[0]).scale(1.0 / end.width());
 		Vec3 up = corners[3].subtract(corners[0]).scale(1.0 / end.height());
@@ -990,12 +1020,12 @@ public final class PortalViewRenderer {
 					Vec3 p10 = p00.add(right);
 					Vec3 p11 = p10.add(up);
 					Vec3 p01 = p00.add(up);
-					cardVertex(builder, p00, sprite.getU0(), sprite.getV1());
-					cardVertex(builder, p10, sprite.getU1(), sprite.getV1());
-					cardVertex(builder, p11, sprite.getU1(), sprite.getV0());
-					cardVertex(builder, p00, sprite.getU0(), sprite.getV1());
-					cardVertex(builder, p11, sprite.getU1(), sprite.getV0());
-					cardVertex(builder, p01, sprite.getU0(), sprite.getV0());
+					cardVertex(builder, p00, u0, v1);
+					cardVertex(builder, p10, u1, v1);
+					cardVertex(builder, p11, u1, v0);
+					cardVertex(builder, p00, u0, v1);
+					cardVertex(builder, p11, u1, v0);
+					cardVertex(builder, p01, u0, v0);
 				}
 			}
 			try (MeshData mesh = builder.buildOrThrow()) {
@@ -1007,7 +1037,7 @@ public final class PortalViewRenderer {
 						ClientVersioned.setPipeline(pass, TEXTURED_CARD_PIPELINE);
 						RenderSystem.bindDefaultUniforms(pass);
 						pass.setUniform("DynamicTransforms", transforms);
-						ClientVersioned.bindTexture(pass, "Sampler0", atlas.getTextureView(), atlas.getSampler());
+						ClientVersioned.bindTexture(pass, "Sampler0", texture.getTextureView(), texture.getSampler());
 						ClientVersioned.drawVertices(pass, vertices, vertexCount);
 					}
 				} finally {

@@ -15,8 +15,8 @@ import java.nio.file.Path;
 
 /**
  * Client rendering budget, from {@code config/netherview-client.json} (written with
- * defaults on first start). Each live portal is a full extra level render, so these trade
- * frame time for how many portals show the other side.
+ * defaults on first start, and by {@link ClientConfigScreen}). Each live portal is a full extra
+ * level render, so these trade frame time for how many portals show the other side.
  */
 public final class ClientConfig {
 	private static final Logger LOGGER = LoggerFactory.getLogger("netherview");
@@ -29,10 +29,21 @@ public final class ClientConfig {
 	public double liveViewDistance = 48.0;
 	/** Render distance (chunks) used through portals; capped at the game's own render distance. */
 	public int remoteRenderDistance = 8;
+	/** The same, over views the server streams live (0 = a clear window, 1 = a normal portal). */
+	public double streamedPortalOpacity = 0.0;
 	/** Portals wider or taller than this (portal blocks) are left as vanilla portals on this client. */
 	public int maxPortalSize = 21;
 	/** Share of vanilla's swirl particles a linked portal keeps (1 = all, 0 = none); unlinked portals keep all. */
 	public double portalParticles = 0.25;
+	/**
+	 * On servers without the NetherView server half: portals you've been through show the far
+	 * side as you last saw it (no mobs), and a trip through them skips the loading screen.
+	 */
+	public boolean offlinePreviews = true;
+	/** How opaque the portal's own surface (swirl, starfield) drawn over such a remembered view is (0 = a clear window, 1 = a normal portal). */
+	public double offlinePortalOpacity = 0.45;
+	/** Disk space for the remembered chunks (MB, per server); the least recently used go first. */
+	public int offlineCacheMb = 256;
 
 	/** {@link #maxLivePortals}, unless a perf-mode dev override is set. */
 	public int effectiveMaxLivePortals() {
@@ -56,8 +67,23 @@ public final class ClientConfig {
 		return instance;
 	}
 
+	private static Path file() {
+		return FabricLoader.getInstance().getConfigDir().resolve("netherview-client.json");
+	}
+
+	/** Write the current settings (as changed in the settings screen) back to the file. */
+	public void save() {
+		this.clamp();
+		Path file = file();
+		try (Writer writer = Files.newBufferedWriter(file)) {
+			GSON.toJson(this, writer);
+		} catch (IOException e) {
+			LOGGER.warn("Couldn't save {}: {}", file, e.toString());
+		}
+	}
+
 	private static ClientConfig load() {
-		Path file = FabricLoader.getInstance().getConfigDir().resolve("netherview-client.json");
+		Path file = file();
 		ClientConfig config = new ClientConfig();
 		try {
 			if (Files.exists(file)) {
@@ -74,11 +100,18 @@ public final class ClientConfig {
 		} catch (IOException | JsonParseException e) {
 			LOGGER.warn("Couldn't read {}, using defaults: {}", file, e.toString());
 		}
-		config.maxLivePortals = Math.clamp(config.maxLivePortals, 0, 8);
-		config.liveViewDistance = Math.clamp(config.liveViewDistance, 0.0, 256.0);
-		config.remoteRenderDistance = Math.clamp(config.remoteRenderDistance, 2, 32);
-		config.maxPortalSize = Math.clamp(config.maxPortalSize, 2, 21);
-		config.portalParticles = Math.clamp(config.portalParticles, 0.0, 1.0);
+		config.clamp();
 		return config;
+	}
+
+	private void clamp() {
+		this.maxLivePortals = Math.clamp(this.maxLivePortals, 0, 8);
+		this.liveViewDistance = Math.clamp(this.liveViewDistance, 0.0, 256.0);
+		this.remoteRenderDistance = Math.clamp(this.remoteRenderDistance, 2, 32);
+		this.maxPortalSize = Math.clamp(this.maxPortalSize, 2, 21);
+		this.portalParticles = Math.clamp(this.portalParticles, 0.0, 1.0);
+		this.streamedPortalOpacity = Math.clamp(this.streamedPortalOpacity, 0.0, 1.0);
+		this.offlinePortalOpacity = Math.clamp(this.offlinePortalOpacity, 0.0, 1.0);
+		this.offlineCacheMb = Math.clamp(this.offlineCacheMb, 16, 8192);
 	}
 }

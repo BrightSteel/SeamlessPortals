@@ -9,7 +9,8 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": ["dev.ryan.netherview.NetherView"],
-		"client": ["dev.ryan.netherview.client.NetherViewClient"]
+		"client": ["dev.ryan.netherview.client.NetherViewClient"],
+		"modmenu": ["dev.ryan.netherview.client.ModMenuIntegration"]
 	},
 	"mixins": [
 		"netherview.mixins.json",
@@ -23,5 +24,8 @@
 		"minecraft": "${minecraft_range}",
 		"java": ">=25",
 		"fabric-api": "*"
+	},
+	"suggests": {
+		"modmenu": "*"
 	}
 }

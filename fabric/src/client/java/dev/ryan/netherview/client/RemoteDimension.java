@@ -20,6 +20,7 @@ import dev.ryan.netherview.compat.RemoteLevelRenderer;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import dev.ryan.netherview.client.mixin.CloudRendererInvoker;
 import dev.ryan.netherview.client.mixin.LevelRendererAccessor;
+import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
@@ -36,6 +37,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData;
 import net.minecraft.resources.ResourceKey;
@@ -51,6 +53,7 @@ import net.minecraft.util.profiling.Profiler;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Iterator;
@@ -78,6 +81,9 @@ public final class RemoteDimension implements AutoCloseable {
 	final CrossFrameResourcePool resourcePool = new CrossFrameResourcePool(3);
 	final ProjectionMatrixBuffer projection = new ProjectionMatrixBuffer("netherview remote");
 	final PortalCamera camera = new PortalCamera();
+	private final ArrayDeque<byte[]> seedQueue = new ArrayDeque<>();
+	/** Remembered chunks lit at once when loaded (nearest first): what the window shows first. */
+	private static final int SEED_NOW_CHUNKS = 9;
 	TextureTarget target;
 	private ChunkPos center;
 	private boolean probePrimed;
@@ -234,6 +240,31 @@ public final class RemoteDimension implements AutoCloseable {
 	/** Same steps as ClientPacketListener.handleLevelChunkWithLight, aimed at this level. */
 	void acceptChunk(ClientboundLevelChunkWithLightPacket packet) {
 		acceptChunk(packet, false);
+	}
+
+	/** Chunks remembered from an earlier visit (see {@link OfflinePortals}), as saved packets. */
+	void queueSeed(List<byte[]> chunks) {
+		this.seedQueue.clear();
+		this.seedQueue.addAll(chunks);
+	}
+
+	/** Load up to {@code max} of the remembered chunks (a few a tick: decoding them all at once would stall). */
+	void seedFromCache(ClientPacketListener connection, int max) {
+		for (int i = 0; i < max && !this.seedQueue.isEmpty(); i++) {
+			byte[] bytes = this.seedQueue.poll();
+			RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.wrappedBuffer(bytes), connection.registryAccess());
+			try {
+				ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC.decode(buf);
+				if (this.level.getChunkSource().getChunk(ClientVersioned.chunkX(packet), ClientVersioned.chunkZ(packet), false) == null) {
+					this.acceptChunk(packet, i < SEED_NOW_CHUNKS);
+				}
+			} catch (RuntimeException e) {
+				this.seedQueue.clear(); // a cache from something else: stop, the portal shows what it has
+				return;
+			} finally {
+				buf.release();
+			}
+		}
 	}
 
 	/**

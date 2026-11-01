@@ -63,7 +63,8 @@ Server: `plugins/NetherView/config.yml` on Paper, `config/netherview-server.prop
 | `fallback-views` | true | Players without the mod see through portals via fake blocks |
 | `fallback-depth` | 24 | How far behind the portal that copy reaches (2-48) |
 
-Client: `config/netherview-client.json`.
+Client: `config/netherview-client.json`, or in game from the mod list with
+[Mod Menu](https://modrinth.com/mod/modmenu) installed.
 
 | Setting | Default | |
 |---|---|---|
@@ -72,6 +73,19 @@ Client: `config/netherview-client.json`.
 | `remoteRenderDistance` | 8 | Render distance through portals (capped at your own) |
 | `maxPortalSize` | 21 | Bigger portals stay vanilla on this client |
 | `portalParticles` | 0.25 | Share of swirl particles a linked portal keeps (0 = none) |
+| `streamedPortalOpacity` | 0 | How opaque the portal's swirl or starfield is over a live view (0 = clear) |
+| `offlinePreviews` | true | Previews on servers without NetherView (below) |
+| `offlinePortalOpacity` | 0.45 | How opaque the portal's swirl or starfield is over such a preview (0-1) |
+| `offlineCacheMb` | 256 | Disk space kept for remembered chunks, per server |
+
+## Servers without NetherView
+
+On a multiplayer server without the plugin or the server half, the mod remembers each Nether or
+End portal trip you take: where the server set you down, and the terrain around both ends (in
+`netherview/<server>/` in the game folder). From then on that portal shows the far side as you
+last saw it, with no mobs and under a see-through swirl (a starfield on End portals). Travel stays
+vanilla (you wait in the portal), but a remembered trip lands without the loading screen. Portals
+you've never been through look like normal portals; nothing is guessed.
 
 ## Building
 

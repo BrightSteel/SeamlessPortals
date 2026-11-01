@@ -149,6 +149,13 @@ public final class DimensionHandoff {
 		wayBack = null;
 		wayBackChunks = List.of();
 		wayBackEntities = List.of();
+		// On a server without the server half, a vanilla trip through a portal this client has
+		// been through before: where it lands is recorded, and remembered (see OfflinePortals).
+		boolean recordedTrip = false;
+		if (announced == null && minecraft.level != null && minecraft.player != null) {
+			announced = OfflinePortals.onDepart(minecraft.level, minecraft.player, newDimension);
+			recordedTrip = announced != null;
+		}
 		// Only a walk through a linked portal, announced by the server, is handed off: a /tp,
 		// death or plugin teleport lands somewhere this view may have no terrain for, and its
 		// placement must be honoured.
@@ -169,6 +176,11 @@ public final class DimensionHandoff {
 		pendingView = remote;
 		pendingEntities = minecraft.getConnection() == null ? List.of() : remote.snapshotEntities(minecraft.getConnection());
 		previousPlayer = minecraft.player;
+		if (recordedTrip) {
+			// A vanilla trip: the server's placement stands (the player waited in the portal and
+			// is set down at the far one), and only a recorded trip back would show a way back.
+			return;
+		}
 		// The server placed the player from where it last saw them, and the client has kept
 		// moving since; carry the client's own position through the portal instead.
 		PortalGeometry geometry = used.geometry();

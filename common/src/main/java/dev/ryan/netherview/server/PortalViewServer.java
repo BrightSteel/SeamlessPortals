@@ -1,6 +1,7 @@
 package dev.ryan.netherview.server;
 
 import dev.ryan.netherview.PortalGeometry;
+import dev.ryan.netherview.VanillaPortals;
 import dev.ryan.netherview.net.PortalEnd;
 import dev.ryan.netherview.net.PortalFill;
 import dev.ryan.netherview.net.PortalLink;
@@ -85,7 +86,6 @@ public final class PortalViewServer {
 	 * An end portal's far side is a flat opening this far above where the player arrives, so
 	 * falling through the portal carries on into a short drop onto the platform.
 	 */
-	private static final double END_DROP = 1.75;
 
 	private static final Map<UUID, PlayerState> PLAYERS = new HashMap<>();
 	private static final Map<DestKey, CachedDest> DESTINATIONS = new HashMap<>();
@@ -311,7 +311,7 @@ public final class PortalViewServer {
 		}
 		DESTINATIONS.remove(new DestKey(level.dimension(), link.min(), link.axis(), link.width(), link.height(), null));
 		return new PortalLink(link.source(), link.destDimension(), link.destDimensionType(),
-				netherDest(link.source(), rect.minCorner, destAxis, rect.axis1Size, rect.axis2Size, PortalFill.NETHER_PORTAL));
+				VanillaPortals.netherDest(link.source(), rect.minCorner, destAxis, rect.axis1Size, rect.axis2Size, PortalFill.NETHER_PORTAL));
 	}
 
 	/** Into the End: build the spawn platform exactly as vanilla does on arrival. The link already points above it. */
@@ -332,9 +332,13 @@ public final class PortalViewServer {
 			state.recheckCursor.clear();
 			state.entities.clear();
 			state.streamedFrom = level.dimension();
+			state.linksSent = false;
 		}
 		List<PortalLink> links = findLinks(server, player, now);
-		if (!links.equals(state.links)) {
+		if (!state.linksSent || !links.equals(state.links)) {
+			// Sent once per world even when empty: that's how a client knows it has a server
+			// half to stream to it (otherwise it may draw recorded portals of its own).
+			state.linksSent = true;
 			state.links = links;
 			sender.send(player, new PortalLinksPayload(links), PortalLinksPayload.STREAM_CODEC);
 		}
@@ -479,7 +483,7 @@ public final class PortalViewServer {
 			BlockUtil.FoundRectangle destRect = BlockUtil.getLargestRectangleAround(
 					pos, destAxis, 21, Direction.Axis.Y, 21, p -> dest.getBlockState(p) == destState);
 			link = new PortalLink(source, destId, destType,
-					netherDest(source, destRect.minCorner, destAxis, destRect.axis1Size, destRect.axis2Size, PortalFill.NETHER_PORTAL));
+					VanillaPortals.netherDest(source, destRect.minCorner, destAxis, destRect.axis1Size, destRect.axis2Size, PortalFill.NETHER_PORTAL));
 			DESTINATIONS.put(key, new CachedDest(link, now + FOUND_DEST_CACHE_TICKS));
 		} else {
 			// No portal yet: show the area a new one would be built around, same size and facing.
@@ -487,14 +491,14 @@ public final class PortalViewServer {
 			int maxY = dest.getMinY() + dest.getLogicalHeight() - rect.axis2Size - 1;
 			int y = Math.clamp(approx.getY() - rect.axis2Size / 2, minY, Math.max(minY, maxY));
 			BlockPos destMin = new BlockPos(approx.getX(), y, approx.getZ()).relative(axis, -rect.axis1Size / 2);
-			link = new PortalLink(source, destId, destType, netherDest(source, destMin, axis, rect.axis1Size, rect.axis2Size, PortalFill.NONE));
+			link = new PortalLink(source, destId, destType, VanillaPortals.netherDest(source, destMin, axis, rect.axis1Size, rect.axis2Size, PortalFill.NONE));
 			DESTINATIONS.put(key, new CachedDest(link, now + VIRTUAL_DEST_CACHE_TICKS));
 		}
 		return link;
 	}
 
 	/**
-	 * Where this end portal leads, as a flat opening of the same size centred {@link #END_DROP}
+	 * Where this end portal leads, as a flat opening of the same size centred {@link VanillaPortals#END_DROP}
 	 * above where the player would land: the End spawn platform, or (from the End) the player's
 	 * own respawn point, found the way vanilla finds it.
 	 */
@@ -524,12 +528,8 @@ public final class PortalViewServer {
 		if (destLevel == null) {
 			return null;
 		}
-		double planeY = arrival.y + END_DROP;
-		BlockPos destMin = BlockPos.containing(
-				arrival.x - rect.axis1Size / 2.0, planeY - PortalGeometry.END_PORTAL_SURFACE, arrival.z - rect.axis2Size / 2.0);
 		PortalLink link = new PortalLink(PortalEnd.endPortal(rect.minCorner, rect.axis1Size, rect.axis2Size, PortalFill.END_PORTAL),
-				destKey.identifier().toString(), dimensionTypeId(destLevel),
-				new PortalEnd(destMin, Direction.DOWN, Direction.SOUTH, rect.axis1Size, rect.axis2Size, 12, PortalFill.NONE));
+				destKey.identifier().toString(), dimensionTypeId(destLevel), VanillaPortals.endDest(rect.axis1Size, rect.axis2Size, arrival));
 		DESTINATIONS.put(key, new CachedDest(link, now + (fromEnd ? VIRTUAL_DEST_CACHE_TICKS : FOUND_DEST_CACHE_TICKS)));
 		return link;
 	}
@@ -538,11 +538,6 @@ public final class PortalViewServer {
 	 * The far end of a nether portal link, facing so that walking through keeps your heading:
 	 * straight through when both portals share an axis, turned 90° when they don't (as vanilla).
 	 */
-	private static PortalEnd netherDest(PortalEnd source, BlockPos min, Direction.Axis destAxis, int width, int height, PortalFill fill) {
-		Direction carried = source.axis() == destAxis ? source.facing() : source.facing().getClockWise();
-		return new PortalEnd(min, carried.getOpposite(), Direction.UP, width, height, 8, fill);
-	}
-
 	public static String dimensionTypeId(ServerLevel level) {
 		return level.dimensionTypeRegistration().unwrapKey().map(key -> key.identifier().toString()).orElse("minecraft:overworld");
 	}
@@ -698,6 +693,7 @@ public final class PortalViewServer {
 
 	private static final class PlayerState {
 		List<PortalLink> links = List.of();
+		boolean linksSent;
 		/** Per destination dimension: chunk → hash of the bytes last sent. */
 		final Map<String, Map<Long, Integer>> sentChunkHashes = new HashMap<>();
 		/** Per destination, where the next scan's re-check slice starts in its list of chunks. */
