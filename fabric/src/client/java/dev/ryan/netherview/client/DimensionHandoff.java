@@ -201,12 +201,10 @@ public final class DimensionHandoff {
 		wayBackEntities = List.of();
 		carriedVehicle = List.of();
 		carriedVehicleId = -1;
-		// On a server without the server half, a vanilla trip through a portal this client has
-		// been through before: where it lands is recorded, and remembered (see OfflinePortals).
-		boolean recordedTrip = false;
+		// On a server without the server half, a vanilla trip through a portal: where it lands is
+		// recorded, for that portal's preview (see OfflinePortals). The trip itself stays vanilla.
 		if (announced == null && minecraft.level != null && minecraft.player != null) {
-			announced = OfflinePortals.onDepart(minecraft.level, minecraft.player, newDimension);
-			recordedTrip = announced != null;
+			OfflinePortals.onDepart(minecraft.level, minecraft.player, newDimension);
 		}
 		// Only a walk through a linked portal, announced by the server, is handed off: a /tp,
 		// death or plugin teleport lands somewhere this view may have no terrain for, and its
@@ -228,11 +226,6 @@ public final class DimensionHandoff {
 		pendingView = remote;
 		pendingEntities = minecraft.getConnection() == null ? List.of() : remote.snapshotEntities(minecraft.getConnection());
 		previousPlayer = minecraft.player;
-		if (recordedTrip) {
-			// A vanilla trip: the server's placement stands (the player waited in the portal and
-			// is set down at the far one), and only a recorded trip back would show a way back.
-			return;
-		}
 		// The server placed the player from where it last saw them, and the client has kept
 		// moving since; carry the client's own position through the portal instead.
 		PortalGeometry geometry = used.geometry();

@@ -86,8 +86,8 @@ On a multiplayer server without the plugin or the server half, the mod remembers
 End portal trip you take: where the server set you down, and the terrain around both ends (in
 `netherview/<server>/` in the game folder). From then on that portal shows the far side as you
 last saw it, with no mobs and under a see-through swirl (a starfield on End portals). Travel stays
-vanilla (you wait in the portal), but a remembered trip lands without the loading screen. Portals
-you've never been through look like normal portals; nothing is guessed.
+vanilla: you wait in the portal, then see the loading screen. Portals you've never been through
+look like normal portals; nothing is guessed.
 
 ## Building
 

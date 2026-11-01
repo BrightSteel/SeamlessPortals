@@ -30,8 +30,8 @@ import java.util.List;
  * Portal views on servers without the NetherView server half. Nothing is streamed there, so a
  * portal shows its far side only once the player has been through it: the trip is recorded
  * (where the server set them down) and the chunks around both ends are kept on disk as last
- * seen. Such a view is frozen, has no mobs, and is drawn under a see-through swirl: travel stays
- * vanilla (wait in the portal), but a recorded trip lands without the loading screen.
+ * seen. Such a view is frozen, has no mobs, and is drawn under a see-through swirl; travel stays
+ * vanilla (wait in the portal, then the loading screen).
  */
 public final class OfflinePortals {
 	/** A trip through a portal: from {@code sourceDimension}, as a link to where it landed. */
@@ -106,20 +106,20 @@ public final class OfflinePortals {
 	/**
 	 * The player is leaving {@code level} for {@code destination}. If they're standing in a
 	 * portal, start recording the trip (and save the chunks around the portal, the far end of a
-	 * trip back). Returns the trip previously recorded through it, for the hand-off, or null.
+	 * trip back).
 	 */
-	static PortalLink onDepart(ClientLevel level, LocalPlayer player, ResourceKey<Level> destination) {
+	static void onDepart(ClientLevel level, LocalPlayer player, ResourceKey<Level> destination) {
 		if (!active()) {
-			return null;
+			return;
 		}
 		// Vanilla never sends a player back through the portal they arrived in until they've
-		// stepped out of it: leaving from there is a command or plugin teleport, not this portal.
+		// stepped out of it: leaving from there is a command or plugin teleport, not a trip to record.
 		PortalEnd source = level == steppedOutIn && steppedOut ? portalAt(level, player.getBoundingBox()) : null;
 		if (source == null) {
 			pending = null;
-			return null;
+			return;
 		}
-		List<Recorded> trips = recorded();
+		recorded();
 		pending = new Pending(source, level.dimension(), destination);
 		pendingTicks = 0;
 		// Copied now: the level is about to be replaced.
@@ -132,14 +132,6 @@ public final class OfflinePortals {
 			}
 		}
 		OfflineCache.saveChunks(folder, level.dimension(), center, chunks, capBytes());
-		String from = level.dimension().identifier().toString();
-		for (Recorded trip : trips) {
-			if (trip.sourceDimension().equals(from) && trip.link().min().equals(source.min())
-					&& trip.link().destDimension().equals(destination.identifier().toString())) {
-				return trip.link();
-			}
-		}
-		return null;
 	}
 
 	/** Every client tick. */

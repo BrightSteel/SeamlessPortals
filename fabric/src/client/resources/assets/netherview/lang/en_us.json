@@ -15,7 +15,7 @@
 	"netherview.config.streamedPortalOpacity": "Live Portal Opacity",
 	"netherview.config.streamedPortalOpacity.tooltip": "How strongly the portal's swirl or starfield shows over a live view. 0% is a clear window.",
 	"netherview.config.offlinePreviews": "Offline Previews",
-	"netherview.config.offlinePreviews.tooltip": "On servers without NetherView: portals you've been through show the far side as you last saw it, and the trip skips the loading screen.",
+	"netherview.config.offlinePreviews.tooltip": "On servers without NetherView: portals you've been through show the far side as you last saw it.",
 	"netherview.config.offlinePortalOpacity": "Offline Portal Opacity",
 	"netherview.config.offlinePortalOpacity.tooltip": "How strongly the portal's swirl or starfield shows over an offline preview. 0% is a clear window.",
 	"netherview.config.offlineCacheMb": "Offline Cache",

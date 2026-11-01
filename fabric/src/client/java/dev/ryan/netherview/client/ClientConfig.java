@@ -37,7 +37,7 @@ public final class ClientConfig {
 	public double portalParticles = 0.25;
 	/**
 	 * On servers without the NetherView server half: portals you've been through show the far
-	 * side as you last saw it (no mobs), and a trip through them skips the loading screen.
+	 * side as you last saw it (no mobs).
 	 */
 	public boolean offlinePreviews = true;
 	/** How opaque the portal's own surface (swirl, starfield) drawn over such a remembered view is (0 = a clear window, 1 = a normal portal). */
