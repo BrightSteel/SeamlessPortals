@@ -1,0 +1,38 @@
+{
+	"required": true,
+	"package": "dev.ryan.seamlessportals.client.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"AbstractEndPortalRendererMixin",
+		"CameraAccessor",
+		"ChunkFadeMixin",
+		"ClientPacketListenerAccessor",
+		"ChunkPacketDataAccessor",
+		"ClientLevelClockMixin",
+		"ClientPacketListenerMixin",
+		"CloudRendererInvoker",
+		"FramerateLimitTrackerMixin",
+		"GameRendererAccessor",
+		"GameRendererMixin",
+		"LevelRendererAccessor",
+		"LivingEntityAccessor",
+		"PlayerAccessor",
+		"LocalPlayerMixin",
+		"MainRenderTargetAccessor",
+		"PortalParticlesMixin",
+		"RemoteCullAccessor",
+		"RemoteExtractMixin",
+		"RemoteRenderDistanceMixin",
+		"RenderSectionRegionAccessor",
+		"SectionCompilerMixin",
+		"SectionNeighborsMixin",
+		"EntitySectionCullMixin",
+		"KeepTerrainBuffersMixin",
+		"KeepTerrainHeapsMixin",
+		"SectionOcclusionGraphMixin",
+		"TheEndGatewayRendererMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

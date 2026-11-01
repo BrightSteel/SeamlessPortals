@@ -1,0 +1,21 @@
+{
+	"required": true,
+	"package": "dev.ryan.seamlessportals.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"BlockItemMixin",
+		"BucketItemMixin",
+		"CustomPortalEntityMixin",
+		"EndGatewayBlockMixin",
+		"EndPortalBlockMixin",
+		"FlowingFluidMixin",
+		"LiquidBlockMixin",
+		"NetherPortalBlockMixin",
+		"PistonStructureResolverMixin",
+		"ServerExplosionMixin",
+		"SpongeBlockMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

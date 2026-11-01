@@ -8,6 +8,7 @@ for file in versions/*.properties; do
 	mc=$(basename "$file" .properties)
 	echo "== Minecraft $mc"
 	./gradlew build -Pmc="$mc" -q
-	cp fabric/build/libs/netherview-fabric-mc"$mc"-*.jar paper/build/libs/netherview-paper-mc"$mc"-*.jar build/dist/
+	cp fabric/build/libs/seamlessportals-fabric-mc"$mc"-*.jar paper/build/libs/seamlessportals-paper-mc"$mc"-*.jar build/dist/
+	cp paper/build/libs/seamlessportals-paper-api-*.jar build/dist/
 done
 ls build/dist

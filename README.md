@@ -1,4 +1,4 @@
-# NetherView
+# SeamlessPortals
 
 See-through portals for Minecraft Java 26.1.2, 26.2 and 26.3. Nether portals, End portals and
 admin-made custom portals show the world on the other side, live, and you cross them by just
@@ -10,9 +10,9 @@ The project ships two things:
 
 - **A Fabric mod** (client and server in one jar). On the client it renders the far side of
   portals and makes the crossing seamless. On a Fabric server or in singleplayer it also streams
-  the far side to players, handles travel and adds `/nvportal`.
+  the far side to players, handles travel and adds `/sportal`.
 - **A Paper plugin**, the server half for Paper servers. Players with the mod get the full
-  experience; players without it still see through portals (see `fallback-views` below).
+  experience; players without it see and use portals as in vanilla.
 
 ## Install
 
@@ -22,33 +22,64 @@ The project ships two things:
 | Fabric server | The Fabric mod on the server, and on each client that should see through portals |
 | Paper server | The Paper plugin on the server; the Fabric mod on clients |
 
-Each jar is built for one Minecraft version, named `netherview-<fabric|paper>-mc<version>-<release>.jar`.
+Each jar is built for one Minecraft version, named `seamlessportals-<fabric|paper>-mc<version>-<release>.jar`.
 Requires Java 25.
 
 ## Custom portals
 
-`/nvportal` (alias `/nvp`) creates portals of any size and fill out of any opening, and links them
-to each other or to a fixed or random spot, within one world or across worlds.
+`/seamlessportals` (alias `/sportal`) creates portals of any size and fill out of any opening,
+and links them to each other or to a fixed or random spot, within one world or across worlds.
 
 ```
-/nvportal wand                          get the wand; left/right click two corners
-/nvportal create <name> [fill]          a portal from the selection (you stand on its front)
-/nvportal createat <name> <world> <x1 y1 z1> <x2 y2 z2> <facing> [up] [fill]
-/nvportal link <a> <b>                  two-way pair
-/nvportal target <name> here | <world> <x y z> [yaw pitch] | random
-/nvportal fill|public|unlink|delete|info|tp|list ...
+/sportal wand                          get the wand; left/right click two corners
+/sportal create <name> [fill]          a portal from the selection (you stand on its front)
+/sportal createat <name> <world> <x1 y1 z1> <x2 y2 z2> <facing> [up] [fill]
+/sportal move <name> <world> <x1 y1 z1> <x2 y2 z2> <facing> [up]   (keeps its links)
+/sportal link <a> <b>                  two-way pair
+/sportal target <name> here | <world> <x y z> [yaw pitch] | random
+/sportal fill|public|unlink|delete|info|tp|list ...
 ```
 
 Fills: `nether_portal`, `end_portal`, `end_gateway`, `water`, `lava`.
 
 Permissions (Paper, or a permissions mod on Fabric; operators have them all by default):
-`netherview.admin` to manage portals, `netherview.use.<name>` to use one,
-`netherview.see.<name>` to see through it only. `/nvportal public <name> true|see|false` opens a
+`seamlessportals.admin` to manage portals, `seamlessportals.use.<name>` to use one,
+`seamlessportals.see.<name>` to see through it only. `/sportal public <name> true|see|false` opens a
 portal to everyone.
+
+## API for other plugins and mods
+
+Other plugins (Paper) and mods (Fabric server) can create, move, link and delete custom portals,
+look them up, and hook into portal changes and trips. Every change works like the matching
+`/sportal` command and fires the same events.
+
+**Paper.** Compile against `seamlessportals-paper-api-<release>.jar` (from `build/dist`), add
+`depend: [SeamlessPortals]` (or `softdepend`) to your plugin.yml, then:
+
+```java
+SeamlessPortalsApi api = SeamlessPortalsApi.get();
+Portal portal = api.create("spawn", corner1, corner2, BlockFace.NORTH);
+api.link("spawn", "hub");
+api.move("spawn", newCorner1, newCorner2, BlockFace.EAST, null);
+api.delete("spawn");
+```
+
+Events in `dev.ryan.seamlessportals.api.event`, all cancellable: `PortalCreateEvent`,
+`PortalChangeEvent` (moved, refilled, linked, retargeted, made public or private),
+`PortalDeleteEvent`, and `PortalTravelEvent`, which fires whenever SeamlessPortals moves something
+through a portal (custom portals, and mod players through nether and end portals). Its
+`setTo` sends the trip somewhere else, as an ordinary teleport.
+
+**Fabric.** Depend on the SeamlessPortals mod; `dev.ryan.seamlessportals.api.SeamlessPortalsApi` has the
+same operations with Minecraft types, and `SeamlessPortalsEvents` has `CREATE`, `CHANGE`, `DELETE`
+and `TRAVEL` (return false, or null for a trip, to stop it).
+
+Failures (a taken name, a blocked or oversized opening, a cancelled event) throw
+`PortalException` with a message fit to show a player. Call the API from the server thread.
 
 ## Configuration
 
-Server: `plugins/NetherView/config.yml` on Paper, `config/netherview-server.properties` on Fabric
+Server: `plugins/SeamlessPortals/config.yml` on Paper, `config/seamlessportals-server.properties` on Fabric
 (same settings, camelCase names there).
 
 | Setting | Default | |
@@ -62,10 +93,8 @@ Server: `plugins/NetherView/config.yml` on Paper, `config/netherview-server.prop
 | `max-portal-size` | 21 | Bigger portals stay vanilla |
 | `tick-destination` | false | Keep the far side ticking while someone looks through |
 | `seamless-travel` | true | Walk-through travel for mod players; false keeps vanilla travel |
-| `fallback-views` | true | Players without the mod see through portals via fake blocks |
-| `fallback-depth` | 24 | How far behind the portal that copy reaches (2-48) |
 
-Client: `config/netherview-client.json`, or in game from the mod list with
+Client: `config/seamlessportals-client.json`, or in game from the mod list with
 [Mod Menu](https://modrinth.com/mod/modmenu) installed.
 
 | Setting | Default | |
@@ -76,18 +105,26 @@ Client: `config/netherview-client.json`, or in game from the mod list with
 | `maxPortalSize` | 21 | Bigger portals stay vanilla on this client |
 | `portalParticles` | 0.25 | Share of swirl particles a linked portal keeps (0 = none) |
 | `streamedPortalOpacity` | 0 | How opaque the portal's swirl or starfield is over a live view (0 = clear) |
-| `offlinePreviews` | true | Previews on servers without NetherView (below) |
+| `offlinePreviews` | true | Previews on servers without SeamlessPortals (below) |
 | `offlinePortalOpacity` | 0.45 | How opaque the portal's swirl or starfield is over such a preview (0-1) |
 | `offlineCacheMb` | 256 | Disk space kept for remembered chunks, per server |
 
-## Servers without NetherView
+## Servers without SeamlessPortals
 
 On a multiplayer server without the plugin or the server half, the mod remembers each Nether or
 End portal trip you take: where the server set you down, and the terrain around both ends (in
-`netherview/<server>/` in the game folder). From then on that portal shows the far side as you
+`seamlessportals/<server>/` in the game folder). From then on that portal shows the far side as you
 last saw it, with no mobs and under a see-through swirl (a starfield on End portals). Travel stays
 vanilla: you wait in the portal, then see the loading screen. Portals you've never been through
 look like normal portals; nothing is guessed.
+
+## Upgrading from NetherView
+
+This project was called NetherView. On first start, files saved under the old name are moved to
+the new one: the plugin folder (`plugins/NetherView` with its portals), the Fabric server's config
+and per-world portals, the client config and its remembered chunks. Two things need changing by
+hand: permissions are now `seamlessportals.*` (were `netherview.*`), and the command is
+`/seamlessportals` or `/sportal` (was `/nvportal`).
 
 ## Building
 

@@ -1,0 +1,23 @@
+{
+	"seamlessportals.config.title": "SeamlessPortals Settings",
+	"seamlessportals.config.blocks": "%s blocks",
+	"seamlessportals.config.chunks": "%s chunks",
+	"seamlessportals.config.maxLivePortals": "Live Portals",
+	"seamlessportals.config.maxLivePortals.tooltip": "Portals that show the other side live each frame (nearest first). Each one is an extra world render; the rest show a flat card.",
+	"seamlessportals.config.liveViewDistance": "Live View Range",
+	"seamlessportals.config.liveViewDistance.tooltip": "Portals farther away than this only show a flat card.",
+	"seamlessportals.config.remoteRenderDistance": "Render Distance",
+	"seamlessportals.config.remoteRenderDistance.tooltip": "How far you see through a portal. Never more than your own render distance.",
+	"seamlessportals.config.maxPortalSize": "Max Portal Size",
+	"seamlessportals.config.maxPortalSize.tooltip": "Portals wider or taller than this stay normal portals.",
+	"seamlessportals.config.portalParticles": "Portal Particles",
+	"seamlessportals.config.portalParticles.tooltip": "Share of the swirl particles a see-through portal keeps.",
+	"seamlessportals.config.streamedPortalOpacity": "Live Portal Opacity",
+	"seamlessportals.config.streamedPortalOpacity.tooltip": "How strongly the portal's swirl or starfield shows over a live view. 0% is a clear window.",
+	"seamlessportals.config.offlinePreviews": "Offline Previews",
+	"seamlessportals.config.offlinePreviews.tooltip": "On servers without SeamlessPortals: portals you've been through show the far side as you last saw it.",
+	"seamlessportals.config.offlinePortalOpacity": "Offline Portal Opacity",
+	"seamlessportals.config.offlinePortalOpacity.tooltip": "How strongly the portal's swirl or starfield shows over an offline preview. 0% is a clear window.",
+	"seamlessportals.config.offlineCacheMb": "Offline Cache",
+	"seamlessportals.config.offlineCacheMb.tooltip": "Disk space for remembered chunks, per server. The least recently used go first."
+}

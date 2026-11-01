@@ -1,21 +1,21 @@
 {
 	"schemaVersion": 1,
-	"id": "netherview",
+	"id": "seamlessportals",
 	"version": "${version}",
-	"name": "NetherView",
-	"description": "Nether and end portals show the dimension on the other side, plus admin-defined custom portals. Install on the client to see through portals; on a Fabric server (or Paper with the NetherView plugin) for streaming, travel and /nvportal.",
+	"name": "SeamlessPortals",
+	"description": "Nether and end portals show the dimension on the other side, plus admin-defined custom portals. Install on the client to see through portals; on a Fabric server (or Paper with the SeamlessPortals plugin) for streaming, travel and /sportal.",
 	"authors": ["Ryan"],
 	"license": "MIT",
 	"environment": "*",
 	"entrypoints": {
-		"main": ["dev.ryan.netherview.NetherView"],
-		"client": ["dev.ryan.netherview.client.NetherViewClient"],
-		"modmenu": ["dev.ryan.netherview.client.ModMenuIntegration"]
+		"main": ["dev.ryan.seamlessportals.SeamlessPortals"],
+		"client": ["dev.ryan.seamlessportals.client.SeamlessPortalsClient"],
+		"modmenu": ["dev.ryan.seamlessportals.client.ModMenuIntegration"]
 	},
 	"mixins": [
-		"netherview.mixins.json",
+		"seamlessportals.mixins.json",
 		{
-			"config": "netherview.client.mixins.json",
+			"config": "seamlessportals.client.mixins.json",
 			"environment": "client"
 		}
 	],

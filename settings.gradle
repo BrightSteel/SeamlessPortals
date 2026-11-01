@@ -13,6 +13,6 @@ pluginManagement {
 	}
 }
 
-rootProject.name = 'NetherView'
+rootProject.name = 'SeamlessPortals'
 include 'fabric'
 include 'paper'

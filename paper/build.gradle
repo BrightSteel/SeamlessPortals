@@ -6,7 +6,7 @@ plugins {
 apply from: rootProject.file('gradle/versions.gradle')
 
 base {
-	archivesName = "netherview-paper-mc${mcProps.minecraft_version}"
+	archivesName = "seamlessportals-paper-mc${mcProps.minecraft_version}"
 }
 
 repositories {
@@ -40,3 +40,17 @@ processResources {
 		expand props
 	}
 }
+
+// The API alone (dev.ryan.seamlessportals.api and its events), for other plugins to compile
+// against. It only uses Bukkit types, so it's the same for every Minecraft version.
+def apiClasses = 'dev/ryan/seamlessportals/api/**'
+def apiJar = tasks.register('apiJar', Jar) {
+	archiveBaseName = 'seamlessportals-paper-api'
+	from(sourceSets.main.output) { include apiClasses }
+}
+def apiSourcesJar = tasks.register('apiSourcesJar', Jar) {
+	archiveBaseName = 'seamlessportals-paper-api'
+	archiveClassifier = 'sources'
+	from(sourceSets.main.allJava) { include apiClasses }
+}
+tasks.named('assemble') { dependsOn apiJar, apiSourcesJar }

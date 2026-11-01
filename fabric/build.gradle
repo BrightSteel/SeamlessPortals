@@ -5,7 +5,7 @@ plugins {
 apply from: rootProject.file('gradle/versions.gradle')
 
 base {
-	archivesName = "netherview-fabric-mc${mcProps.minecraft_version}"
+	archivesName = "seamlessportals-fabric-mc${mcProps.minecraft_version}"
 }
 
 loom {
@@ -17,28 +17,28 @@ loom {
 			client()
 			name = "Test Client"
 			programArgs "--quickPlaySingleplayer", "NetherViewTest"
-			vmArgs "-Dnetherview.devCapture=true"
+			vmArgs "-Dseamlessportals.devCapture=true"
 		}
 		// Joins the local Paper test server in paper/run (port 25571).
 		paperTestClient {
 			client()
 			name = "Paper Test Client"
 			programArgs "--quickPlayMultiplayer", "localhost:25571"
-			vmArgs "-Dnetherview.perf=true", "-Dnetherview.devCapture=true"
+			vmArgs "-Dseamlessportals.perf=true", "-Dseamlessportals.devCapture=true"
 		}
-		// Joins the Paper test server acting like a client without the mod (fallback views).
+		// Joins the Paper test server acting like a client without the mod.
 		vanillaTestClient {
 			client()
 			name = "Vanilla-acting Test Client"
 			programArgs "--quickPlayMultiplayer", "localhost:25571"
-			vmArgs "-Dnetherview.actVanilla=true", "-Dnetherview.devCapture=true"
+			vmArgs "-Dseamlessportals.actVanilla=true", "-Dseamlessportals.devCapture=true"
 		}
 		// Joins the mod's own dedicated server from runServer (port 25570).
 		fabricTestClient {
 			client()
 			name = "Fabric Test Client"
 			programArgs "--quickPlayMultiplayer", "localhost:25570"
-			vmArgs "-Dnetherview.perf=true", "-Dnetherview.devCapture=true"
+			vmArgs "-Dseamlessportals.perf=true", "-Dseamlessportals.devCapture=true"
 		}
 	}
 
@@ -48,7 +48,7 @@ loom {
 	}
 
 	mods {
-		"netherview" {
+		"seamlessportals" {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
 		}
@@ -121,7 +121,7 @@ if (mcProps.shader_import != '#include') {
 	tasks.named('processClientResources') {
 		def directive = mcProps.shader_import
 		inputs.property 'shaderImport', directive
-		filesMatching('assets/netherview/shaders/**') {
+		filesMatching('assets/seamlessportals/shaders/**') {
 			filter { String line ->
 				line.startsWith('#extension GL_ARB_separate_shader_objects') ? null
 						: line.replaceFirst(/^#include </, "${directive} <").replaceFirst(/^layout\(location = \d+\) (in|out) /, '$1 ')

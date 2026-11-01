@@ -1,23 +1,23 @@
-name: NetherView
+name: SeamlessPortals
 version: '${version}'
-main: dev.ryan.netherview.paper.NetherViewPlugin
+main: dev.ryan.seamlessportals.paper.SeamlessPortalsPlugin
 api-version: '1.21'
-description: Streams the far side of nether portals to players running the NetherView client mod, and makes linked portals walk-through.
+description: Streams the far side of nether portals to players running the SeamlessPortals client mod, and makes linked portals walk-through.
 commands:
-  nvportal:
+  seamlessportals:
     description: Create and manage custom portals.
-    usage: /nvportal help
-    permission: netherview.admin
-    aliases: [nvp]
+    usage: /sportal help
+    permission: seamlessportals.admin
+    aliases: [sportal]
 permissions:
-  netherview.admin:
+  seamlessportals.admin:
     description: Create, link and delete custom portals, and use the portal wand.
     default: op
-  netherview.use.*:
-    description: Use (and see through) every custom portal. Per portal - netherview.use.<name>.
+  seamlessportals.use.*:
+    description: Use (and see through) every custom portal. Per portal - seamlessportals.use.<name>.
     default: op
     children:
-      netherview.see.*: true
-  netherview.see.*:
-    description: See through every custom portal without using it. Per portal - netherview.see.<name>.
+      seamlessportals.see.*: true
+  seamlessportals.see.*:
+    description: See through every custom portal without using it. Per portal - seamlessportals.see.<name>.
     default: op

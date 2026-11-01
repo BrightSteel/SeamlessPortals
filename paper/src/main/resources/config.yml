@@ -27,11 +27,3 @@ tick-destination: false
 # momentum). Set to false to keep vanilla travel (standing in the portal, survival delay) for
 # everyone; the view through portals is still shown.
 seamless-travel: true
-# Players without the client mod see through portals too: the server sends them fake blocks,
-# a copy of the far side placed behind the portal only where they look through it. Their own
-# sky and lighting still show, so it's less convincing than the mod, and it costs bandwidth.
-fallback-views: true
-# How far behind a portal (in blocks, 2-48) that copy reaches. Deeper shows more of the far
-# side, but the cost grows with the cube of the depth: per player near a portal, about 0.3 ms
-# of server time per redraw at 16, 0.8 ms at 24, 1.5 ms at 32 and 4 ms at 48.
-fallback-depth: 24
