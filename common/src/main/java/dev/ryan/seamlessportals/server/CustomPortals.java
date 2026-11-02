@@ -130,6 +130,20 @@ public final class CustomPortals {
 		return name == null ? null : PORTALS.get(name);
 	}
 
+	/**
+	 * Whether a custom portal's opening has its lower corner at {@code min} in the level: unlike
+	 * {@link #at}, this finds the blockless ones too (they own no blocks).
+	 */
+	public static boolean opensAt(Level level, BlockPos min) {
+		String world = level.dimension().identifier().toString();
+		for (CustomPortal portal : PORTALS.values()) {
+			if (portal.world().equals(world) && portal.end().min().equals(min)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Every custom portal block in the level, and its portal's name. */
 	public static Map<BlockPos, String> blocksIn(Level level) {
 		return blocks.getOrDefault(level.dimension().identifier().toString(), Map.of());

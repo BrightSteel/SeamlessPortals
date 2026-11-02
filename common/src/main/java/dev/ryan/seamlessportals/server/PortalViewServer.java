@@ -293,7 +293,7 @@ public final class PortalViewServer {
 		for (PortalLink link : state.links) {
 			PortalGeometry geometry = PortalGeometry.of(link);
 			boolean crossed = geometry.horizontal() ? geometry.entersSource(lastFeet, feet) : geometry.entersSource(lastEye, eye);
-			if (!crossed || !seamless(level, link) || CustomPortals.at(level, link.min()) != null) {
+			if (!crossed || !seamless(level, link) || !vanillaAt(level, link)) {
 				continue; // custom portals are travelled by CustomPortalTravel, for everyone
 			}
 			if (root != player && root.getControllingPassenger() != player) {
@@ -307,6 +307,18 @@ public final class PortalViewServer {
 			return travel(server, player, level, root, link, geometry);
 		}
 		return false;
+	}
+
+	/**
+	 * Whether {@code link} is a vanilla portal still standing: one of its blocks at its corner,
+	 * and no custom portal there. Not a custom portal that owns no blocks (a window, a
+	 * starfield), nor a link to one just removed: travelled as a nether portal, vanilla's search
+	 * would send the player to whatever portal is near the same spot (and build one if none is).
+	 */
+	private static boolean vanillaAt(Level level, PortalLink link) {
+		BlockState state = level.getBlockState(link.min());
+		return (state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL))
+				&& CustomPortals.at(level, link.min()) == null && !CustomPortals.opensAt(level, link.min());
 	}
 
 	/** Which side of a portal's plane {@code point} is on (signed distance from it). */
