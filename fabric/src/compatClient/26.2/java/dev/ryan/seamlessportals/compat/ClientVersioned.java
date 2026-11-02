@@ -46,6 +46,7 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.state.GameRenderState;
 import net.minecraft.resources.Identifier;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.joml.Vector4f;
 import org.jspecify.annotations.Nullable;
 
@@ -262,6 +263,12 @@ public final class ClientVersioned {
 		return color == null
 				? RenderSystem.getDynamicUniforms().writeTransform(modelView)
 				: RenderSystem.getDynamicUniforms().writeTransform(modelView, color);
+	}
+
+	/** As {@link #transform(Matrix4f, Vector4f)}, with a texture matrix (shaders may use it for anything). */
+	public static GpuBufferSlice transform(Matrix4f modelView, @Nullable Vector4f color, Matrix4f textureMatrix) {
+		return RenderSystem.getDynamicUniforms().writeTransform(
+				modelView, color != null ? color : new Vector4f(1.0F, 1.0F, 1.0F, 1.0F), new Vector3f(), textureMatrix);
 	}
 
 	public static BufferBuilder triangles(ByteBufferBuilder bytes, VertexFormat format) {

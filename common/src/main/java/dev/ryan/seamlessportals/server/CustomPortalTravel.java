@@ -68,10 +68,14 @@ final class CustomPortalTravel {
 				UUID id = entity.getUUID();
 				seen.add(id);
 				Vec3 point = referencePoint(entity, geometry);
-				Vec3 last = lastPoints.put(id, point);
 				if (COOLDOWN.containsKey(id)) {
+					// Just arrived: only where it was first seen counts, so walking straight back
+					// through meanwhile still sends it once the cooldown's over (otherwise it's
+					// left past the plane, never having crossed it as far as this can tell).
+					lastPoints.putIfAbsent(id, point);
 					continue;
 				}
+				Vec3 last = lastPoints.put(id, point);
 				boolean through = onContact
 						? entity.getBoundingBox().intersects(fillBlocks)
 						: last != null && last.distanceToSqr(point) <= MAX_STEP * MAX_STEP && geometry.entersSource(last, point);

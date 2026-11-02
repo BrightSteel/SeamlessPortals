@@ -101,6 +101,11 @@ public final class PortalViewRenderer {
 	private static final double WINDOW_BIAS = 0.002;
 	/** Depth of the window box behind the opening; well past the camera's 0.05 near plane. */
 	private static final double WINDOW_DEPTH = 0.1;
+	/**
+	 * How far the window box reaches past the opening's edges (blocks), so it surely covers it:
+	 * its shaders draw only what's seen through the opening itself (see {@link #opening}).
+	 */
+	private static final double WINDOW_OVERLAP = 1.0 / 64.0;
 	/** The portal surface over a view sits this far in front of the window (blocks), clear of its depth. */
 	private static final double SWIRL_OFFSET = 0.01;
 	/** Vanilla's end portal textures: the backdrop and the star layers its shader scrolls. */
@@ -1042,6 +1047,28 @@ public final class PortalViewRenderer {
 		return leftBehind;
 	}
 
+	/**
+	 * The opening, for the window's shaders to draw only what's seen through it (the box they're
+	 * drawn on covers more of the screen, from close up and askew): its middle relative to
+	 * {@code eye}, its right and up axes over its half width and height, and its plane's normal,
+	 * as the matrix's columns.
+	 */
+	private static Matrix4f opening(Link link, Vec3 eye) {
+		PortalGeometry geometry = link.geometry();
+		Vec3 middle = geometry.sourceCenter().subtract(eye);
+		Vec3[] corners = geometry.sourceCorners(eye, 0.0);
+		Vec3 right = corners[1].subtract(corners[0]);
+		Vec3 up = corners[3].subtract(corners[0]);
+		Vec3 normal = geometry.sourceNormal();
+		right = right.scale(2.0 / right.lengthSqr());
+		up = up.scale(2.0 / up.lengthSqr());
+		return new Matrix4f(
+				(float) middle.x, (float) middle.y, (float) middle.z, 0.0F,
+				(float) right.x, (float) right.y, (float) right.z, 0.0F,
+				(float) up.x, (float) up.y, (float) up.z, 0.0F,
+				(float) normal.x, (float) normal.y, (float) normal.z, 0.0F);
+	}
+
 	/** The portal opening filled with {@code source}'s image (by screen position), or with {@code color} if there's none. */
 	private static void drawWindow(Link link, RenderTarget source, Vector4f color) {
 		Minecraft minecraft = Minecraft.getInstance();
@@ -1054,8 +1081,8 @@ public final class PortalViewRenderer {
 		// is clipped; the back and side faces still cover exactly the opening's pixels, and
 		// every fragment samples the far side by screen position, so the image is unchanged.
 		// Which side the box extends to follows the eye as rendered (see projectionCenter).
-		Vec3[] front = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET + WINDOW_BIAS);
-		Vec3[] back = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET + WINDOW_BIAS - WINDOW_DEPTH);
+		Vec3[] front = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET + WINDOW_BIAS, WINDOW_OVERLAP);
+		Vec3[] back = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET + WINDOW_BIAS - WINDOW_DEPTH, WINDOW_OVERLAP);
 		Vec3[] box = {front[0], front[1], front[2], front[3], back[0], back[1], back[2], back[3]};
 		int[] triangles = {
 				0, 1, 2, 0, 2, 3, // front (the opening)
@@ -1075,7 +1102,7 @@ public final class PortalViewRenderer {
 			try (MeshData mesh = builder.buildOrThrow()) {
 				GpuBuffer vertices = RenderSystem.getDevice().createBuffer(() -> "seamlessportals portal window", GpuBuffer.USAGE_VERTEX, mesh.vertexBuffer());
 				try {
-					GpuBufferSlice transforms = ClientVersioned.transform(new Matrix4f(mainCamera.viewRotationMatrix), color);
+					GpuBufferSlice transforms = ClientVersioned.transform(new Matrix4f(mainCamera.viewRotationMatrix), color, opening(link, eye));
 					RenderSystem.setProjectionMatrix(levelProjectionBuffer, ProjectionType.PERSPECTIVE);
 					try (RenderPass pass = ClientVersioned.renderPass(() -> "seamlessportals portal window", mainTarget)) {
 						ClientVersioned.setPipeline(pass, source != null ? COMPOSITE_PIPELINE : CARD_PIPELINE);

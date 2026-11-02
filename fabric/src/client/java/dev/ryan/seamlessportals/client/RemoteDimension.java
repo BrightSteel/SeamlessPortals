@@ -7,7 +7,6 @@ import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
 import net.minecraft.network.syncher.SynchedEntityData;
-import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -169,17 +168,16 @@ public final class RemoteDimension implements AutoCloseable {
 
 	/**
 	 * {@link #snapshotEntities(ClientPacketListener)} for any level, only within {@code radius}
-	 * chunks of {@code center} if given; never the local player, nor (from the player's own level)
-	 * display entities: those are mostly a plugin's, sent to each player and never real
-	 * (holograms, modelled mobs, a police box), so the server's stream of the view's entities
-	 * never has them, and a copy would hang about in the view until the stream replaced it. Real
-	 * ones come back with the stream. A view's own are all real (they came by the stream): kept.
+	 * chunks of {@code center} if given; never the local player. Display entities too, though
+	 * some are a plugin's, sent to each player and never real (holograms, modelled mobs), which
+	 * the server's stream of a view never has: copies are seeded, and taken away if the stream
+	 * doesn't confirm them (see DimensionHandoff#onServerEntity), while the real ones (a police
+	 * box made of displays) carry straight on instead of vanishing until the stream sends them.
 	 */
 	static List<Packet<ClientGamePacketListener>> snapshotEntities(ClientLevel level, ClientPacketListener connection, ChunkPos center, int radius) {
 		List<Packet<ClientGamePacketListener>> packets = new ArrayList<>();
 		for (Entity entity : level.entitiesForRendering()) {
-			if (entity instanceof LocalPlayer || entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null
-					|| entity instanceof Display && level == Minecraft.getInstance().level) {
+			if (entity instanceof LocalPlayer || entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null) {
 				continue;
 			}
 			if (center != null && Math.max(Math.abs(entity.chunkPosition().x() - center.x()), Math.abs(entity.chunkPosition().z() - center.z())) > radius) {
