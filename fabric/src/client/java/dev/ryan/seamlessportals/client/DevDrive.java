@@ -23,6 +23,7 @@ import java.util.List;
  *       movement keys (forward and strafe -1, 0 or 1) and turn, for that many ticks;</li>
  *   <li>{@code record <name>} / {@code stop}: save each tick's frame as
  *       {@code drive_<name>_<n>.png}, or stop;</li>
+ *   <li>{@code respawn}: respawns, if dead;</li>
  *   <li>{@code done <name>}: writes {@code drive_<name>.done} when it's reached.</li>
  * </ul>
  */
@@ -85,6 +86,7 @@ final class DevDrive {
 					frame = 0;
 				}
 				case "stop" -> recording = null;
+				case "respawn" -> player.respawn();
 				case "done" -> {
 					try {
 						Files.writeString(minecraft.gameDirectory.toPath().resolve("drive_" + step[1] + ".done"), "");

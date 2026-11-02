@@ -203,6 +203,10 @@ public final class PortalViewRenderer {
 	private static Vector3f projectionCenter = new Vector3f();
 	private static Vec3 visualEye = Vec3.ZERO;
 	private static boolean loggedFailure;
+	/** When each live portal (by its end) became live, for {@link #EMPTY_VIEW_WAIT_MS}. */
+	private static final Map<PortalEnd, Long> LIVE_SINCE = new HashMap<>();
+	/** How long a blockless portal waits for its view to have terrain before it's drawn anyway (ms). */
+	private static final long EMPTY_VIEW_WAIT_MS = 1500;
 	private static RenderTarget lastRemoteTarget;
 	private static RenderTarget leftBehind;
 
@@ -410,6 +414,10 @@ public final class PortalViewRenderer {
 		}
 
 		Map<PortalEnd, RemoteDimension> assigned = assignViews(live);
+		long now = Util.getMillis();
+		Set<PortalEnd> liveSources = new HashSet<>();
+		live.forEach(link -> liveSources.add(link.link().source()));
+		LIVE_SINCE.keySet().retainAll(liveSources);
 		// Before the windows: a warm-up pass may use a window's own view, whose image must end
 		// up being the window's.
 		warmBehind(minecraft, main, levelProjection);
@@ -423,8 +431,10 @@ public final class PortalViewRenderer {
 				renderRemote(minecraft, main, link, view, levelProjection, rect);
 				// A portal with no blocks of its own, whose view hasn't any terrain yet (just made,
 				// still meshing): not drawn, so whatever lies behind it shows meanwhile, not an
-				// empty sky. What's behind can be made to match (PaperTardis does).
-				if (link.link().source().fill().blockless() && view.renderer.renderedSections() == 0) {
+				// empty sky. What's behind can be made to match (PaperTardis does). Not for
+				// long, though: a view of the void never has terrain to show.
+				long since = LIVE_SINCE.computeIfAbsent(link.link().source(), source -> now);
+				if (link.link().source().fill().blockless() && view.renderer.renderedSections() == 0 && now - since < EMPTY_VIEW_WAIT_MS) {
 					continue;
 				}
 				passes.add(new Pass(link, view, view.target));
