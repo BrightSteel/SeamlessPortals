@@ -3,6 +3,7 @@ package dev.ryan.seamlessportals.server;
 import dev.ryan.seamlessportals.PortalGeometry;
 import dev.ryan.seamlessportals.net.PortalEnd;
 import dev.ryan.seamlessportals.net.PortalFill;
+import dev.ryan.seamlessportals.net.PortalInsets;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
@@ -228,13 +229,62 @@ public final class PortalAdmin {
 			throw new IllegalArgumentException(problem + ".");
 		}
 		PortalEnd old = portal.end();
-		PortalEnd end = new PortalEnd(old.min(), old.facing(), old.up(), old.width(), old.height(), surface(fill), fill);
+		PortalEnd end = new PortalEnd(old.min(), old.facing(), old.up(), old.width(), old.height(), surface(fill), fill, old.insets(), old.frontOnly());
 		ServerLevel level = level(server, portal.world());
 		change(portal, portal.withEnd(end));
 		CustomPortalBlocks.clear(level, old);
 		CustomPortalBlocks.place(level, end);
 		CustomPortals.put(portal.withEnd(end));
 		return "'" + portal.name() + "' is now filled with " + fill.name().toLowerCase(Locale.ROOT) + ".";
+	}
+
+	/**
+	 * Where the opening's plane sits in its row of blocks, in sixteenths of a block along its
+	 * facing axis (0 = the side toward lower coordinates, 8 = the middle, 16 = the other side):
+	 * set back behind something in the opening, or level with a surface.
+	 */
+	public static String setSurface(String name, int surface) {
+		CustomPortal portal = existing(name);
+		if (surface < 0 || surface > 16) {
+			throw new IllegalArgumentException("The surface is 0 to 16 sixteenths of a block.");
+		}
+		PortalEnd old = portal.end();
+		CustomPortal after = portal.withEnd(old.withSurface(surface));
+		change(portal, after);
+		CustomPortals.put(after);
+		return "'" + portal.name() + "' now has its surface at " + surface + "/16.";
+	}
+
+	/**
+	 * Pulls the opening in from its blocks' edges, in sixteenths of a block on each side as seen
+	 * from its front: for an opening narrower than whole blocks, such as a doorway in a model.
+	 */
+	public static String setInsets(String name, PortalInsets insets) {
+		CustomPortal portal = existing(name);
+		PortalEnd old = portal.end();
+		if (insets.left() < 0 || insets.right() < 0 || insets.bottom() < 0 || insets.top() < 0) {
+			throw new IllegalArgumentException("Insets can't be negative.");
+		}
+		if (insets.left() + insets.right() >= old.width() * 16 || insets.bottom() + insets.top() >= old.height() * 16) {
+			throw new IllegalArgumentException("Those insets would leave no opening.");
+		}
+		CustomPortal after = portal.withEnd(old.withInsets(insets));
+		change(portal, after);
+		CustomPortals.put(after);
+		return "'" + portal.name() + "' is now inset " + describe(insets) + ".";
+	}
+
+	/** Whether only what goes in from the portal's front goes through (from behind, it's just an opening). */
+	public static String setFrontOnly(String name, boolean frontOnly) {
+		CustomPortal portal = existing(name);
+		CustomPortal after = portal.withEnd(portal.end().withFrontOnly(frontOnly));
+		change(portal, after);
+		CustomPortals.put(after);
+		return "'" + portal.name() + "' now " + (frontOnly ? "only takes what goes in from its front." : "works from both sides.");
+	}
+
+	private static String describe(PortalInsets insets) {
+		return insets.left() + "/" + insets.right() + "/" + insets.bottom() + "/" + insets.top() + " sixteenths (left/right/bottom/top)";
 	}
 
 	/** {@code value}: true (anyone can use it), see (anyone can see through it) or false. */
@@ -265,6 +315,7 @@ public final class PortalAdmin {
 		PortalEnd end = portal.end();
 		return " world " + portal.world() + ", corner " + end.min().toShortString()
 				+ "\n " + end.width() + "×" + end.height() + ", facing " + end.facing().getSerializedName() + ", up " + end.up().getSerializedName()
+				+ (end.insets().isNone() ? "" : ", inset " + describe(end.insets())) + (end.frontOnly() ? ", front only" : "")
 				+ "\n fill " + end.fill().name().toLowerCase(Locale.ROOT) + ", " + describe(portal.access(), portal.name())
 				+ "\n leads to " + describe(portal.destination()) + nextSpot(portal);
 	}

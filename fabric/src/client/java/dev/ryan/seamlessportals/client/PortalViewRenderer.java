@@ -93,6 +93,12 @@ public final class PortalViewRenderer {
 	 * frame, the far half from the destination frame seen through the window.
 	 */
 	private static final double PORTAL_PLANE_OFFSET = 0.0;
+	/**
+	 * How far the window box is drawn toward the camera from the portal's plane (blocks): a few
+	 * hundredths of a pixel, so a portal lying on a surface (a floor level with a slab's top, say)
+	 * is drawn over it instead of flickering against it. The clip plane beyond stays on the plane.
+	 */
+	private static final double WINDOW_BIAS = 0.002;
 	/** Depth of the window box behind the opening; well past the camera's 0.05 near plane. */
 	private static final double WINDOW_DEPTH = 0.1;
 	/** The portal surface over a view sits this far in front of the window (blocks), clear of its depth. */
@@ -150,7 +156,7 @@ public final class PortalViewRenderer {
 	private static final double RIDDEN_VEHICLE_REACH = 2.0;
 
 	/** A live portal view rendered this frame, waiting to be composited. */
-	private record Pass(Link link, RemoteDimension view) {
+	private record Pass(Link link, RemoteDimension view, RenderTarget target) {
 	}
 
 	private static final List<Pass> passes = new ArrayList<>();
@@ -161,12 +167,15 @@ public final class PortalViewRenderer {
 	private static final int WARM_INTERVAL_FRAMES = 3;
 	private static int warmFrames;
 	private static final List<Link> cards = new ArrayList<>();
-	/** Which view each live portal (by its lowest block) used last frame, so it keeps its meshes and visibility. */
-	private static Map<BlockPos, RemoteDimension> assignments = new HashMap<>();
+	/**
+	 * Which view each live portal (by its whole opening: two portals can share a lowest block,
+	 * as a doorway and a floor window do) used last frame, so it keeps its meshes and visibility.
+	 */
+	private static Map<PortalEnd, RemoteDimension> assignments = new HashMap<>();
 
-	/** The view the portal at {@code min} was last drawn with, if any. */
-	static RemoteDimension assignedView(BlockPos min) {
-		return assignments.get(min);
+	/** The view the portal opening {@code source} was last drawn with, if any. */
+	static RemoteDimension assignedView(PortalEnd source) {
+		return assignments.get(source);
 	}
 
 	private static Link activeLink;
@@ -295,7 +304,7 @@ public final class PortalViewRenderer {
 			// camera reaches the surface, so there is no crossing to preview.
 			// A recorded portal (no server half) keeps vanilla travel: the server won't move a player
 			// for walking through, so there's no crossing to preview.
-			if (!link.offline() && !link.geometry().horizontal() && link.geometry().crossesSource(previous, eye) && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
+			if (!link.offline() && !link.geometry().horizontal() && link.geometry().entersSource(previous, eye) && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
 				crossedLink = link;
 				crossedAt = Util.getMillis();
 				return;
@@ -368,12 +377,17 @@ public final class PortalViewRenderer {
 		visible.sort(Comparator.comparingDouble(link -> link.geometry().sourceCenter().distanceToSqr(eye)));
 
 		List<Link> live = new ArrayList<>();
+		List<Link> occluding = new ArrayList<>();
 		List<float[]> liveQuads = new ArrayList<>();
 		Matrix4f viewProjection = new Matrix4f(levelProjection).mul(main.getViewRotationMatrix(new Matrix4f()));
 		double maxDistanceSqr = config.effectiveLiveViewDistance() * config.effectiveLiveViewDistance();
 		for (Link link : visible) {
 			float[] quad = screenQuad(link, eye, viewProjection, 0.0);
-			if (quad != null && liveQuads.stream().anyMatch(cover -> covers(cover, quad))) {
+			boolean hidden = false;
+			for (int i = 0; i < liveQuads.size() && quad != null && !hidden; i++) {
+				hidden = covers(liveQuads.get(i), quad) && behind(link, occluding.get(i), eye);
+			}
+			if (hidden) {
 				continue; // entirely behind a nearer live portal (e.g. a chain of portals): nothing to see
 			}
 			if (live.size() < config.effectiveMaxLivePortals() && link.geometry().sourceCenter().distanceToSqr(eye) <= maxDistanceSqr) {
@@ -383,25 +397,32 @@ public final class PortalViewRenderer {
 				float[] occluder = screenQuad(link, eye, viewProjection, FRAME_OCCLUDER_MARGIN);
 				if (occluder != null) {
 					liveQuads.add(occluder);
+					occluding.add(link);
 				}
 			} else {
 				cards.add(link);
 			}
 		}
 
-		Map<BlockPos, RemoteDimension> assigned = assignViews(live);
+		Map<PortalEnd, RemoteDimension> assigned = assignViews(live);
 		// Before the windows: a warm-up pass may use a window's own view, whose image must end
 		// up being the window's.
 		warmBehind(minecraft, main, levelProjection);
 		for (Link link : live) {
-			RemoteDimension view = assigned.get(link.link().min());
+			RemoteDimension view = assigned.get(link.link().source());
 			Vector4f rect = screenRect(link, main, levelProjection);
 			if (rect == null) {
 				continue; // entirely off screen after all
 			}
 			try {
 				renderRemote(minecraft, main, link, view, levelProjection, rect);
-				passes.add(new Pass(link, view));
+				// A portal with no blocks of its own, whose view hasn't any terrain yet (just made,
+				// still meshing): not drawn, so whatever lies behind it shows meanwhile, not an
+				// empty sky. What's behind can be made to match (PaperTardis does).
+				if (link.link().source().fill().blockless() && view.renderer.renderedSections() == 0) {
+					continue;
+				}
+				passes.add(new Pass(link, view, view.target));
 				lastRemoteTarget = view.target;
 			} catch (RuntimeException e) {
 				if (!loggedFailure) {
@@ -471,6 +492,7 @@ public final class PortalViewRenderer {
 			case WATER -> state.is(Blocks.WATER);
 			case LAVA -> state.is(Blocks.LAVA);
 			case NONE -> state.isAir();
+			case WINDOW, STARFIELD -> true; // no blocks of its own to lose
 		};
 	}
 
@@ -494,6 +516,23 @@ public final class PortalViewRenderer {
 	}
 
 	/** Whether every corner of {@code inner} lies inside the convex quad {@code outer}. */
+	/**
+	 * Whether {@code link}'s opening lies wholly beyond {@code nearer}'s plane, seen from
+	 * {@code eye}: only then can the nearer one hide it (a floor window in front of a doorway
+	 * may fall inside the doorway's outline on screen, but it isn't behind it).
+	 */
+	private static boolean behind(Link link, Link nearer, Vec3 eye) {
+		Vec3 center = nearer.geometry().sourceCenter();
+		Vec3 normal = nearer.geometry().sourceNormal();
+		double eyeSide = eye.subtract(center).dot(normal);
+		for (Vec3 corner : link.geometry().sourceCorners(eye, 0.0)) {
+			if (corner.subtract(center).dot(normal) * eyeSide > 1.0E-4) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	private static boolean covers(float[] outer, float[] inner) {
 		for (int i = 0; i < 4; i++) {
 			if (!insideConvex(outer, inner[i * 2], inner[i * 2 + 1])) {
@@ -528,16 +567,16 @@ public final class PortalViewRenderer {
 	 * view when it can (following its destination if that moved); the rest take free views,
 	 * which are re-centred on their new destination.
 	 */
-	private static Map<BlockPos, RemoteDimension> assignViews(List<Link> live) {
-		Map<BlockPos, RemoteDimension> assigned = new HashMap<>();
+	private static Map<PortalEnd, RemoteDimension> assignViews(List<Link> live) {
+		Map<PortalEnd, RemoteDimension> assigned = new HashMap<>();
 		Set<RemoteDimension> used = new HashSet<>();
 		List<Link> unassigned = new ArrayList<>();
 		for (Link link : live) {
-			RemoteDimension previous = assignments.get(link.link().min());
+			RemoteDimension previous = assignments.get(link.link().source());
 			if (previous != null && previous.key == link.dest() && !previous.isClosed() && used.add(previous)) {
 				// Same portal, but its destination can move (a random portal's next spot).
 				RemoteDimensions.recenter(previous, ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
-				assigned.put(link.link().min(), previous);
+				assigned.put(link.link().source(), previous);
 			} else {
 				unassigned.add(link);
 			}
@@ -551,7 +590,7 @@ public final class PortalViewRenderer {
 				}
 			}
 			RemoteDimensions.recenter(view, ChunkPos.containing(BlockPos.containing(link.geometry().destCenter())));
-			assigned.put(link.link().min(), view);
+			assigned.put(link.link().source(), view);
 		}
 		return assigned;
 	}
@@ -892,6 +931,7 @@ public final class PortalViewRenderer {
 			compositeAll();
 		} finally {
 			DevCapture.frame(Minecraft.getInstance());
+			DevDrive.frame(Minecraft.getInstance());
 		}
 	}
 
@@ -928,13 +968,13 @@ public final class PortalViewRenderer {
 		ClientConfig config = ClientConfig.get();
 		Vec3 eye = ClientVersioned.gameRenderState().levelRenderState.cameraRenderState.pos;
 		for (Pass pass : passes) {
-			drawWindow(pass.link(), pass.view(), null);
+			drawWindow(pass.link(), pass.target(), null);
 			// The portal's own surface over the view, as translucent as configured. By default only
 			// a remembered view (frozen, without mobs) gets it: it reads as a glimpse, and as a
 			// portal you wait in rather than walk through.
 			Link link = pass.link();
 			double opacity = link.offline() ? config.offlinePortalOpacity : config.streamedPortalOpacity;
-			if (opacity <= 0.0 || link.link().source().fill() == PortalFill.NONE) {
+			if (opacity <= 0.0 || link.link().source().fill() == PortalFill.NONE || link.link().source().fill().blockless()) {
 				continue;
 			}
 			double depth = Math.abs(eye.subtract(link.geometry().sourceCenter()).dot(link.geometry().sourceNormal()));
@@ -960,6 +1000,9 @@ public final class PortalViewRenderer {
 				case NETHER_PORTAL, WATER, LAVA -> drawTexturedCard(card, 1.0F, PORTAL_PLANE_OFFSET);
 				case END_PORTAL, END_GATEWAY -> card.geometry().sourceBlocks().forEach(pos -> unhiddenEnds.add(pos.immutable()));
 				case NONE -> drawWindow(card, (RenderTarget) null, cardColor(card));
+				case WINDOW, STARFIELD -> {
+					// only ever a window: over budget, it's simply not there
+				}
 			}
 		}
 		PortalHiding.setUnhiddenEndPortals(unhiddenEnds);
@@ -1011,8 +1054,8 @@ public final class PortalViewRenderer {
 		// is clipped; the back and side faces still cover exactly the opening's pixels, and
 		// every fragment samples the far side by screen position, so the image is unchanged.
 		// Which side the box extends to follows the eye as rendered (see projectionCenter).
-		Vec3[] front = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET);
-		Vec3[] back = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET - WINDOW_DEPTH);
+		Vec3[] front = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET + WINDOW_BIAS);
+		Vec3[] back = link.geometry().sourceCorners(visualEye, PORTAL_PLANE_OFFSET + WINDOW_BIAS - WINDOW_DEPTH);
 		Vec3[] box = {front[0], front[1], front[2], front[3], back[0], back[1], back[2], back[3]};
 		int[] triangles = {
 				0, 1, 2, 0, 2, 3, // front (the opening)

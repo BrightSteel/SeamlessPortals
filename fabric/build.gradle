@@ -23,8 +23,9 @@ loom {
 		paperTestClient {
 			client()
 			name = "Paper Test Client"
-			programArgs "--quickPlayMultiplayer", "localhost:25571"
-			vmArgs "-Dseamlessportals.perf=true", "-Dseamlessportals.devCapture=true"
+			programArgs "--quickPlayMultiplayer", "localhost:25571", "--username", "Tester"
+			// -PcaptureTicks=10 saves frames more often (to catch an animation)
+			vmArgs "-Dseamlessportals.perf=true", "-Dseamlessportals.devCapture=true", "-Dseamlessportals.devCaptureTicks=${project.findProperty('captureTicks') ?: 60}"
 		}
 		// Joins the Paper test server acting like a client without the mod.
 		vanillaTestClient {
@@ -57,6 +58,7 @@ loom {
 
 // Server half (portal discovery, chunk/entity streaming, travel) shared with the Paper plugin.
 sourceSets.main.java.srcDir rootProject.file('common/src/main/java')
+sourceSets.main.resources.srcDir rootProject.file('common/src/main/resources')
 // The code that differs between Minecraft versions: the folders versions/<mc>.properties names
 // (compat=26.3,26.2+ is 26.3's own, then what 26.2 and 26.3 share), under src/compat (server
 // and common) and src/compatClient.

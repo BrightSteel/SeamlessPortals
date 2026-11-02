@@ -16,6 +16,7 @@ public class SeamlessPortalsClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		ClientTickEvents.END_CLIENT_TICK.register(DevCapture::tick);
+		ClientTickEvents.START_CLIENT_TICK.register(DevDrive::tick);
 		if (ACT_VANILLA) {
 			return;
 		}

@@ -13,6 +13,8 @@ import dev.ryan.seamlessportals.server.PortalViewServer;
 import dev.ryan.seamlessportals.server.PortalWands;
 import dev.ryan.seamlessportals.server.Renamed;
 import dev.ryan.seamlessportals.server.ServerConfig;
+import dev.ryan.seamlessportals.server.StarfieldPack;
+import dev.ryan.seamlessportals.server.StarfieldPanels;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.papermc.paper.event.entity.EntityInsideBlockEvent;
@@ -33,6 +35,9 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import java.io.IOException;
+import java.nio.file.Path;
 
 /**
  * Paper side of SeamlessPortals: runs the shared server logic every tick and delivers its
@@ -65,6 +70,7 @@ public final class SeamlessPortalsPlugin extends JavaPlugin implements Listener 
 				this.getConfig().getBoolean("tick-destination", defaults.tickDestination()),
 				this.getConfig().getBoolean("seamless-travel", defaults.seamlessTravel()),
 				this.getConfig().getInt("max-portals", defaults.maxPortals())));
+		this.writePack();
 		PortalStore store = new PortalStore(this);
 		CustomPortals.init((player, node) -> player.getBukkitEntity().hasPermission("seamlessportals." + node), store::save);
 		store.load();
@@ -82,8 +88,21 @@ public final class SeamlessPortalsPlugin extends JavaPlugin implements Listener 
 
 	@Override
 	public void onDisable() {
+		StarfieldPanels.clear();
 		this.getServer().getServicesManager().unregisterAll(this);
 		PortalAdmin.setHooks(PortalHooks.NONE);
+	}
+
+	/** The resource pack starfield portals need, for players without the mod: for the server's pack (see README). */
+	private void writePack() {
+		Path pack = this.getDataFolder().toPath().resolve("resource pack.zip");
+		try {
+			if (StarfieldPack.write(pack)) {
+				this.getLogger().info("Wrote the SeamlessPortals resource pack (for starfield portals) to " + pack + ": add it to the server's resource packs.");
+			}
+		} catch (IOException e) {
+			this.getLogger().warning("Couldn't write the SeamlessPortals resource pack: " + e.getMessage());
+		}
 	}
 
 	@EventHandler

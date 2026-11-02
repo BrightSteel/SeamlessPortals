@@ -112,6 +112,9 @@ public final class CustomPortals {
 	private static void reindex() {
 		Map<String, Map<BlockPos, String>> index = new HashMap<>();
 		for (CustomPortal portal : PORTALS.values()) {
+			if (portal.end().fill().blockless()) {
+				continue; // owns no blocks
+			}
 			Map<BlockPos, String> world = index.computeIfAbsent(portal.world(), w -> new HashMap<>());
 			for (BlockPos pos : portal.end().blocks()) {
 				world.put(pos.immutable(), portal.name());

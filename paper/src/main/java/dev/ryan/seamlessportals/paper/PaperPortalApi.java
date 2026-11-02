@@ -5,6 +5,7 @@ import dev.ryan.seamlessportals.api.Portal;
 import dev.ryan.seamlessportals.api.PortalAccess;
 import dev.ryan.seamlessportals.api.PortalException;
 import dev.ryan.seamlessportals.api.PortalFill;
+import dev.ryan.seamlessportals.net.PortalInsets;
 import dev.ryan.seamlessportals.server.CustomPortal;
 import dev.ryan.seamlessportals.server.CustomPortals;
 import dev.ryan.seamlessportals.server.PortalAdmin;
@@ -85,6 +86,21 @@ final class PaperPortalApi implements SeamlessPortalsApi {
 	@Override
 	public Portal setAccess(String name, PortalAccess access) {
 		return this.change(name, () -> PortalAdmin.setPublic(name, CustomPortal.Access.valueOf(access.name()).setting()));
+	}
+
+	@Override
+	public Portal setSurface(String name, int sixteenths) {
+		return this.change(name, () -> PortalAdmin.setSurface(name, sixteenths));
+	}
+
+	@Override
+	public Portal setInsets(String name, int left, int right, int bottom, int top) {
+		return this.change(name, () -> PortalAdmin.setInsets(name, new PortalInsets(left, right, bottom, top)));
+	}
+
+	@Override
+	public Portal setFrontOnly(String name, boolean frontOnly) {
+		return this.change(name, () -> PortalAdmin.setFrontOnly(name, frontOnly));
 	}
 
 	/** Runs an operation and returns the portal {@code name} after it. */

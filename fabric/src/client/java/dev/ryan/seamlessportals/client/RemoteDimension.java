@@ -7,6 +7,7 @@ import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -56,8 +57,10 @@ import net.minecraft.world.phys.Vec3;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BiPredicate;
 
 /**
@@ -82,6 +85,8 @@ public final class RemoteDimension implements AutoCloseable {
 	final ProjectionMatrixBuffer projection = new ProjectionMatrixBuffer("seamlessportals remote");
 	final PortalCamera camera = new PortalCamera();
 	private final ArrayDeque<byte[]> seedQueue = new ArrayDeque<>();
+	/** Loaded chunks whose light is in: only those are worth copying to another view (see {@link #seedFrom}). */
+	private final Set<ChunkPos> lit = new HashSet<>();
 	/** Remembered chunks lit at once when loaded (nearest first): what the window shows first. */
 	private static final int SEED_NOW_CHUNKS = 9;
 	TextureTarget target;
@@ -105,7 +110,7 @@ public final class RemoteDimension implements AutoCloseable {
 		if (type == null) {
 			type = types.getOrThrow(dimensionType(key));
 		}
-		ClientLevel.ClientLevelData data = new ClientLevel.ClientLevelData(minecraft.level.getDifficulty(), false, false);
+		ClientLevel.ClientLevelData data = new ClientLevel.ClientLevelData(minecraft.level.getDifficulty(), false, RemoteDimensions.isFlat(key));
 		RemoteClocks.beginConstructing(key);
 		try {
 			this.level = this.renderer.newLevel(connection, data, key, type, CHUNK_RADIUS, key == Level.NETHER ? 32 : 63);
@@ -162,11 +167,19 @@ public final class RemoteDimension implements AutoCloseable {
 		return snapshotEntities(this.level, connection, null, 0);
 	}
 
-	/** {@link #snapshotEntities(ClientPacketListener)} for any level, only within {@code radius} chunks of {@code center} if given; never the local player. */
+	/**
+	 * {@link #snapshotEntities(ClientPacketListener)} for any level, only within {@code radius}
+	 * chunks of {@code center} if given; never the local player, nor (from the player's own level)
+	 * display entities: those are mostly a plugin's, sent to each player and never real
+	 * (holograms, modelled mobs, a police box), so the server's stream of the view's entities
+	 * never has them, and a copy would hang about in the view until the stream replaced it. Real
+	 * ones come back with the stream. A view's own are all real (they came by the stream): kept.
+	 */
 	static List<Packet<ClientGamePacketListener>> snapshotEntities(ClientLevel level, ClientPacketListener connection, ChunkPos center, int radius) {
 		List<Packet<ClientGamePacketListener>> packets = new ArrayList<>();
 		for (Entity entity : level.entitiesForRendering()) {
-			if (entity instanceof LocalPlayer || entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null) {
+			if (entity instanceof LocalPlayer || entity instanceof Player && connection.getPlayerInfo(entity.getUUID()) == null
+					|| entity instanceof Display && level == Minecraft.getInstance().level) {
 				continue;
 			}
 			if (center != null && Math.max(Math.abs(entity.chunkPosition().x() - center.x()), Math.abs(entity.chunkPosition().z() - center.z())) > radius) {
@@ -236,12 +249,29 @@ public final class RemoteDimension implements AutoCloseable {
 				if (this.level.getChunkSource().getChunk(x, z, false) != null) {
 					continue;
 				}
-				LevelChunk chunk = source.level.getChunkSource().getChunk(x, z, false);
-				if (chunk != null) {
-					this.acceptChunk(new ClientboundLevelChunkWithLightPacket(chunk, source.level.getLightEngine(), null, null));
-				}
+				this.copyChunk(source, x, z);
 			}
 		}
+	}
+
+	/**
+	 * Takes {@code source}'s chunk at {@code x, z}, if it has it lit. One whose light is still
+	 * queued there would come with none, and stay black here: it's handed on once lit instead
+	 * (see {@link RemoteDimensions#chunkLit}).
+	 */
+	void copyChunk(RemoteDimension source, int x, int z) {
+		LevelChunk chunk = source.level.getChunkSource().getChunk(x, z, false);
+		if (chunk != null && source.lit.contains(new ChunkPos(x, z))) {
+			// Lit at once: the light's all there already, and a view seeded this way is usually
+			// one about to be looked through (a second portal into the same place).
+			this.acceptChunk(new ClientboundLevelChunkWithLightPacket(chunk, source.level.getLightEngine(), null, null), true);
+		}
+	}
+
+	/** Whether this view would take the chunk at {@code x, z}: in its range, and not loaded yet. */
+	boolean lacksChunk(int x, int z) {
+		return this.center != null && Math.abs(x - this.center.x()) <= CHUNK_RADIUS && Math.abs(z - this.center.z()) <= CHUNK_RADIUS
+				&& this.level.getChunkSource().getChunk(x, z, false) == null;
 	}
 
 	/** Same steps as ClientPacketListener.handleLevelChunkWithLight, aimed at this level. */
@@ -281,6 +311,7 @@ public final class RemoteDimension implements AutoCloseable {
 	void acceptChunk(ClientboundLevelChunkWithLightPacket packet, boolean now) {
 		int x = ClientVersioned.chunkX(packet);
 		int z = ClientVersioned.chunkZ(packet);
+		this.lit.remove(new ChunkPos(x, z));
 		ClientVersioned.replaceWithPacketData(this.level.getChunkSource(), x, z, ClientVersioned.chunkData(packet));
 		ClientboundLightUpdatePacketData lightData = ClientVersioned.lightData(packet);
 		Runnable light = () -> {
@@ -289,6 +320,8 @@ public final class RemoteDimension implements AutoCloseable {
 			if (chunk != null) {
 				this.enableChunkLight(chunk, x, z);
 				this.renderer.chunkReady(chunk.getPos());
+				this.lit.add(new ChunkPos(x, z));
+				RemoteDimensions.chunkLit(this, x, z);
 			}
 		};
 		if (now) {

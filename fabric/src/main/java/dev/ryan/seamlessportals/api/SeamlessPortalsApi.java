@@ -1,6 +1,7 @@
 package dev.ryan.seamlessportals.api;
 
 import dev.ryan.seamlessportals.net.PortalEnd;
+import dev.ryan.seamlessportals.net.PortalInsets;
 import dev.ryan.seamlessportals.server.CustomPortal;
 import dev.ryan.seamlessportals.server.CustomPortals;
 import dev.ryan.seamlessportals.server.PortalAdmin;
@@ -94,6 +95,32 @@ public final class SeamlessPortalsApi {
 
 	public static Portal setAccess(String name, PortalAccess access) {
 		return change(name, () -> PortalAdmin.setPublic(name, CustomPortal.Access.valueOf(access.name()).setting()));
+	}
+
+	/**
+	 * Where the opening's plane sits in its row of blocks, in sixteenths of a block along the
+	 * facing axis (0 = the side toward lower coordinates, 8 = the middle, the default; 16 = the
+	 * other side): set back behind something in the opening, or level with a surface.
+	 */
+	public static Portal setSurface(String name, int sixteenths) {
+		return change(name, () -> PortalAdmin.setSurface(name, sixteenths));
+	}
+
+	/**
+	 * Pulls the opening in from its blocks' edges, in sixteenths of a block on each side as seen
+	 * from its front (left and right along its width, bottom and top along its height): for an
+	 * opening narrower than whole blocks, such as a doorway in a model. Moving a portal resets them.
+	 */
+	public static Portal setInsets(String name, int left, int right, int bottom, int top) {
+		return change(name, () -> PortalAdmin.setInsets(name, new PortalInsets(left, right, bottom, top)));
+	}
+
+	/**
+	 * Makes the portal work only from its front: what goes in from behind just passes the
+	 * opening by (say a doorway you may step out of backward, or land behind).
+	 */
+	public static Portal setFrontOnly(String name, boolean frontOnly) {
+		return change(name, () -> PortalAdmin.setFrontOnly(name, frontOnly));
 	}
 
 	/** The API's view of the server half's portal record. */

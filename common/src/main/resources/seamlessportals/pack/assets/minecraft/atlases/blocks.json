@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {
+      "type": "minecraft:single",
+      "resource": "minecraft:entity/end_portal/end_portal",
+      "sprite": "seamlessportals:block/starfield"
+    }
+  ]
+}

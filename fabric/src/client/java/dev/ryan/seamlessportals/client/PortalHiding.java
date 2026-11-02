@@ -78,13 +78,17 @@ public final class PortalHiding {
 	static void setLinks(List<RemoteDimensions.Link> links) {
 		Set<BlockPos> nextRemote = new HashSet<>();
 		for (RemoteDimensions.Link link : links) {
-			if (link.link().dest().fill() != PortalFill.NONE) {
+			// A window owns no blocks: those it lies over (another portal's) stay. Its far end
+			// may have some all the same.
+			if (link.link().dest().fill() != PortalFill.NONE && !link.link().dest().fill().blockless()) {
 				addEnd(nextRemote, link.link().dest()); // a virtual destination has nothing to hide
 			}
 			// The source too: a copy of the player's own world (a portal within it, or the way
 			// back prepared before a trip) has it, and it's about to be a way back's destination;
 			// meshed as a swirl now, it would show for a frame while it's re-meshed then.
-			addEnd(nextRemote, link.link().source());
+			if (!link.link().source().fill().blockless()) {
+				addEnd(nextRemote, link.link().source());
+			}
 		}
 		Set<BlockPos> previousRemote = hiddenInRemoteLevels;
 		if (!nextRemote.equals(previousRemote)) {
@@ -94,7 +98,9 @@ public final class PortalHiding {
 
 		Set<BlockPos> next = new HashSet<>();
 		for (RemoteDimensions.Link link : links) {
-			addEnd(next, link.link().source());
+			if (!link.link().source().fill().blockless()) {
+				addEnd(next, link.link().source());
+			}
 		}
 		Set<BlockPos> previous = hiddenInPlayerLevel;
 		if (next.equals(previous)) {

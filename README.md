@@ -40,7 +40,14 @@ and links them to each other or to a fixed or random spot, within one world or a
 /sportal fill|public|unlink|delete|info|tp|list ...
 ```
 
-Fills: `nether_portal`, `end_portal`, `end_gateway`, `water`, `lava`.
+Fills: `nether_portal`, `end_portal`, `end_gateway`, `water`, `lava`, `window`, `starfield`.
+`window` places no blocks: only players with the mod see anything there (it still takes everyone
+through). `starfield` is the same, and players without the mod see an end gateway's starfield
+exactly the size of the opening (insets included): an item display sent only to them, drawn by the
+SeamlessPortals resource pack. The server writes that pack at startup (`plugins/SeamlessPortals/resource
+pack.zip` on Paper, `config/seamlessportals/resource pack.zip` on Fabric); add it to the server's
+resource packs. On 26.3 its item shader draws the real end gateway effect from the game's own
+`end_portal` texture; older versions show that texture flat, and without the pack it's a black slab.
 
 Permissions (Paper, or a permissions mod on Fabric; operators have them all by default):
 `seamlessportals.admin` to manage portals, `seamlessportals.use.<name>` to use one,

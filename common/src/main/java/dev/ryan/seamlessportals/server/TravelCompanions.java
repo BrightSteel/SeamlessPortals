@@ -61,8 +61,29 @@ final class TravelCompanions {
 	 * the trip or send it elsewhere (then it's a plain teleport: the view showed the old
 	 * destination). Returns the moved root, or null.
 	 */
+	/** Highest a traveller is lifted out of a floor it would arrive in (blocks): a step's height. */
+	private static final double MAX_LIFT = 0.6;
+	private static final double LIFT_STEP = 1.0 / 64.0;
+
+	/**
+	 * {@code pos}, or as little above it as clears the entity of blocks there, up to a step: the
+	 * far side's floor needn't be level with the near side's ground (a portal whose bottom edge
+	 * is a little above its ground, linked to one level with its floor), and arriving inside the
+	 * floor would drop it through.
+	 */
+	private static Vec3 clear(ServerLevel dest, Entity entity, Vec3 pos) {
+		for (double lift = 0.0; lift <= MAX_LIFT; lift += LIFT_STEP) {
+			Vec3 at = pos.add(0.0, lift, 0.0);
+			if (dest.noCollision(entity, entity.getDimensions(entity.getPose()).makeBoundingBox(at))) {
+				return at;
+			}
+		}
+		return pos;
+	}
+
 	static Entity travel(ServerLevel dest, Entity root, CustomPortal portal, PortalLink link, PortalGeometry geometry, Vec3 destPos,
 			TeleportTransition.PostTeleportTransition after) {
+		destPos = clear(dest, root, destPos);
 		Vec3 velocity = geometry.rotate(root.getDeltaMovement());
 		float[] rotation = geometry.toDestRotation(root.getYRot(), root.getXRot());
 		PortalHooks.Arrival planned = new PortalHooks.Arrival(dest, destPos, rotation[0], rotation[1]);

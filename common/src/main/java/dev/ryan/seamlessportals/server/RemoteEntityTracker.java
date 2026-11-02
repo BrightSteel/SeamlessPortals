@@ -2,6 +2,8 @@ package dev.ryan.seamlessportals.server;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import it.unimi.dsi.fastutil.ints.Int2IntMap;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -14,11 +16,13 @@ import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket;
 import net.minecraft.network.protocol.game.GameProtocols;
+import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerEntity;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
@@ -61,6 +65,12 @@ final class RemoteEntityTracker {
 	};
 
 	private final IntSet tracked = new IntOpenHashSet();
+	/**
+	 * Each tracked entity's data as last sent (its hash): sent again as soon as it changes, not
+	 * only at the next full sync, so a display's new transformation arrives with its
+	 * interpolation (a door swinging) rather than a while later in one jump.
+	 */
+	private final Int2IntMap sentData = new Int2IntOpenHashMap();
 	private String dimension;
 
 	/** Packets that bring the client's copy of {@code level} around {@code center} up to date. */
@@ -69,6 +79,7 @@ final class RemoteEntityTracker {
 		if (!dimension.equals(this.dimension)) {
 			// A new remote level on the client starts empty.
 			this.tracked.clear();
+			this.sentData.clear();
 			this.dimension = dimension;
 		}
 		StreamCodec<ByteBuf, Packet<? super ClientGamePacketListener>> codec = codec(level);
@@ -88,18 +99,24 @@ final class RemoteEntityTracker {
 
 		for (Entity entity : nearby) {
 			int id = entity.getId();
+			List<SynchedEntityData.DataValue<?>> data = entity.getEntityData().getNonDefaultValues();
+			int dataHash = data == null ? 0 : data.hashCode();
 			if (this.tracked.add(id)) {
 				newServerEntity(level, entity)
 						.sendPairingData(player, packet -> out.add(encode(codec, packet)));
+				this.sentData.put(id, dataHash);
 				continue;
 			}
 			out.add(encode(codec, ClientboundEntityPositionSyncPacket.of(entity)));
 			out.add(encode(codec, new ClientboundRotateHeadPacket(entity, Mth.packDegrees(entity.getYHeadRot()))));
-			if (fullSync) {
-				List<SynchedEntityData.DataValue<?>> data = entity.getEntityData().getNonDefaultValues();
+			boolean dataChanged = !this.sentData.containsKey(id) || this.sentData.get(id) != dataHash;
+			if (fullSync || dataChanged) {
 				if (data != null) {
-					out.add(encode(codec, new ClientboundSetEntityDataPacket(id, data)));
+					out.add(encode(codec, new ClientboundSetEntityDataPacket(id, withInterpolationStart(entity, data))));
 				}
+				this.sentData.put(id, dataHash);
+			}
+			if (fullSync) {
 				if (entity instanceof LivingEntity living) {
 					List<Pair<EquipmentSlot, ItemStack>> slots = new ArrayList<>();
 					for (EquipmentSlot slot : EquipmentSlot.VALUES) {
@@ -114,9 +131,40 @@ final class RemoteEntityTracker {
 		gone.removeAll(present);
 		if (!gone.isEmpty()) {
 			this.tracked.removeAll(gone);
+			gone.forEach(this.sentData::remove);
 			out.add(encode(codec, new ClientboundRemoveEntitiesPacket(gone.toIntArray())));
 		}
 		return out;
+	}
+
+	/**
+	 * A display's data, with its interpolation start always in it: the client starts a new
+	 * transformation's interpolation only when that arrives, and at its usual value (no delay,
+	 * the default) it's left out of an entity's non-default data.
+	 */
+	private static List<SynchedEntityData.DataValue<?>> withInterpolationStart(Entity entity, List<SynchedEntityData.DataValue<?>> data) {
+		if (!(entity instanceof Display display) || INTERPOLATION_START == null) {
+			return data;
+		}
+		List<SynchedEntityData.DataValue<?>> all = new ArrayList<>(data);
+		all.removeIf(value -> value.id() == INTERPOLATION_START.id());
+		all.add(SynchedEntityData.DataValue.create(INTERPOLATION_START, display.getTransformationInterpolationDelay()));
+		return all;
+	}
+
+	/** Display's (private) interpolation start accessor, or null if this game hasn't one by that name. */
+	@SuppressWarnings("unchecked")
+	private static final EntityDataAccessor<Integer> INTERPOLATION_START = interpolationStart();
+
+	@SuppressWarnings("unchecked")
+	private static EntityDataAccessor<Integer> interpolationStart() {
+		try {
+			java.lang.reflect.Field field = Display.class.getDeclaredField("DATA_TRANSFORMATION_INTERPOLATION_START_DELTA_TICKS_ID");
+			field.setAccessible(true);
+			return (EntityDataAccessor<Integer>) field.get(null);
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			return null;
+		}
 	}
 
 	String dimension() {
@@ -130,6 +178,7 @@ final class RemoteEntityTracker {
 			out.add(encode(codec(level), new ClientboundRemoveEntitiesPacket(this.tracked.toIntArray())));
 		}
 		this.tracked.clear();
+		this.sentData.clear();
 		this.dimension = null;
 		return out;
 	}

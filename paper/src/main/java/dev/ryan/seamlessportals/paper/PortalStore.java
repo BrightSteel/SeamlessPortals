@@ -2,6 +2,7 @@ package dev.ryan.seamlessportals.paper;
 
 import dev.ryan.seamlessportals.net.PortalEnd;
 import dev.ryan.seamlessportals.net.PortalFill;
+import dev.ryan.seamlessportals.net.PortalInsets;
 import dev.ryan.seamlessportals.server.CustomPortal;
 import dev.ryan.seamlessportals.server.CustomPortals;
 import net.minecraft.core.BlockPos;
@@ -55,6 +56,12 @@ final class PortalStore {
 			section.set("width", end.width());
 			section.set("height", end.height());
 			section.set("surface", end.surface());
+			if (end.frontOnly()) {
+				section.set("front-only", true);
+			}
+			if (!end.insets().isNone()) {
+				section.set("insets", List.of(end.insets().left(), end.insets().right(), end.insets().bottom(), end.insets().top()));
+			}
 			section.set("fill", end.fill().name().toLowerCase(Locale.ROOT));
 			section.set("public", portal.access().setting());
 			switch (portal.destination()) {
@@ -84,6 +91,11 @@ final class PortalStore {
 				direction(section.getString("facing")), direction(section.getString("up")),
 				section.getInt("width"), section.getInt("height"), section.getInt("surface", 8),
 				PortalFill.valueOf(section.getString("fill", "nether_portal").toUpperCase(Locale.ROOT)));
+		end = end.withFrontOnly(section.getBoolean("front-only"));
+		List<Integer> insets = section.getIntegerList("insets");
+		if (insets.size() == 4) {
+			end = end.withInsets(new PortalInsets(insets.get(0), insets.get(1), insets.get(2), insets.get(3)));
+		}
 		CustomPortal.Destination destination = new CustomPortal.Destination.None();
 		if (section.isString("destination.portal")) {
 			destination = new CustomPortal.Destination.Portal(section.getString("destination.portal"));

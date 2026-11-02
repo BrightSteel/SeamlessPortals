@@ -34,12 +34,15 @@ public final class CustomPortalBlocks {
 			case END_GATEWAY -> Blocks.END_GATEWAY.defaultBlockState();
 			case WATER -> Blocks.WATER.defaultBlockState();
 			case LAVA -> Blocks.LAVA.defaultBlockState();
-			case NONE -> Blocks.AIR.defaultBlockState();
+			case NONE, WINDOW, STARFIELD -> Blocks.AIR.defaultBlockState();
 		};
 	}
 
 	/** Whether {@code fill} makes sense for an opening facing {@code facing}. */
 	public static String checkFill(PortalFill fill, Direction facing) {
+		if (fill.blockless()) {
+			return null; // nothing physical: any way up
+		}
 		boolean flat = facing.getAxis() == Direction.Axis.Y;
 		if (fill == PortalFill.NETHER_PORTAL && flat) {
 			return "nether_portal only works upright (a wall), not as a floor or ceiling";
@@ -57,6 +60,9 @@ public final class CustomPortalBlocks {
 
 	/** {@link #blockedCount(ServerLevel, PortalEnd)}, not counting the blocks of {@code leaving} (a portal moving out of the way). */
 	public static int blockedCount(ServerLevel level, PortalEnd end, PortalEnd leaving) {
+		if (end.fill().blockless()) {
+			return 0; // places nothing, so nothing is in its way
+		}
 		BlockState fill = fillState(end);
 		Set<BlockPos> leavingBlocks = new HashSet<>();
 		if (leaving != null) {
@@ -76,6 +82,9 @@ public final class CustomPortalBlocks {
 	}
 
 	public static void place(ServerLevel level, PortalEnd end) {
+		if (end.fill().blockless()) {
+			return;
+		}
 		BlockState fill = fillState(end);
 		for (BlockPos pos : end.blocks()) {
 			level.setBlock(pos, fill, FLAGS);
@@ -95,7 +104,7 @@ public final class CustomPortalBlocks {
 	static void repair(MinecraftServer server) {
 		for (CustomPortal portal : CustomPortals.all()) {
 			ServerLevel level = CustomPortals.level(server, portal.world());
-			if (level == null) {
+			if (level == null || portal.end().fill().blockless()) {
 				continue;
 			}
 			BlockState fill = fillState(portal.end());
@@ -111,6 +120,9 @@ public final class CustomPortalBlocks {
 	}
 
 	public static void clear(ServerLevel level, PortalEnd end) {
+		if (end.fill().blockless()) {
+			return;
+		}
 		for (BlockPos pos : end.blocks()) {
 			level.setBlock(pos, Blocks.AIR.defaultBlockState(), FLAGS);
 		}

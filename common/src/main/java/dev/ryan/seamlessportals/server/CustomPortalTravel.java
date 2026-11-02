@@ -74,7 +74,7 @@ final class CustomPortalTravel {
 				}
 				boolean through = onContact
 						? entity.getBoundingBox().intersects(fillBlocks)
-						: last != null && last.distanceToSqr(point) <= MAX_STEP * MAX_STEP && geometry.crossesSource(last, point);
+						: last != null && last.distanceToSqr(point) <= MAX_STEP * MAX_STEP && geometry.entersSource(last, point);
 				if (!through || entity instanceof ServerPlayer player && !CustomPortals.canUse(player, portal)) {
 					continue;
 				}

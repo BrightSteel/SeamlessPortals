@@ -115,7 +115,7 @@ public final class RemoteDimensions {
 	 * each have their own view, centred on their own destination.)
 	 */
 	public static RemoteDimension viewFor(PortalLink link, ResourceKey<Level> key) {
-		RemoteDimension assigned = PortalViewRenderer.assignedView(link.min());
+		RemoteDimension assigned = PortalViewRenderer.assignedView(link.source());
 		if (assigned != null && assigned.key == key && !assigned.isClosed()) {
 			return assigned;
 		}
@@ -170,6 +170,15 @@ public final class RemoteDimensions {
 			}
 		}
 		OfflinePortals.seed(view);
+	}
+
+	/** {@code view} has just lit the chunk at {@code x, z}: give it to sibling views that are missing it. */
+	static void chunkLit(RemoteDimension view, int x, int z) {
+		for (RemoteDimension sibling : VIEWS.getOrDefault(view.key, List.of())) {
+			if (sibling != view && !sibling.isClosed() && sibling.lacksChunk(x, z)) {
+				sibling.copyChunk(view, x, z);
+			}
+		}
 	}
 
 	/** Re-mesh these positions in every remote view (portal hiding changed there). */
@@ -642,11 +651,40 @@ public final class RemoteDimensions {
 		PortalHiding.setRemoteLevels(levels);
 	}
 
+	/** Which dimensions are superflat, as seen while the player was in them (see {@link #isFlat(ResourceKey)}). */
+	private static final Map<ResourceKey<Level>, Boolean> FLAT = new HashMap<>();
+
 	/** The player changed dimension (or left): everything remote is stale. */
 	private static void syncLevel(Minecraft minecraft) {
 		if (minecraft.level != trackedLevel) {
+			if (minecraft.level == null) {
+				// Left the server: the bridge and the view readied for the way back go too
+				// (across a dimension change they're what keeps the crossing seamless).
+				closeBridge();
+				closePrepared();
+			}
 			clearRemotes();
 			trackedLevel = minecraft.level;
+			if (trackedLevel != null) {
+				FLAT.put(trackedLevel.dimension(), isFlat(trackedLevel));
+			}
 		}
+	}
+
+	/**
+	 * Whether the dimension {@code key} is a superflat world, as the player's level was when they
+	 * were last there: its sky's horizon is at the bottom, not at sea level. A view made with the
+	 * wrong one darkens the sky as if the camera were deep underground.
+	 */
+	static boolean isFlat(ResourceKey<Level> key) {
+		Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft.level != null && minecraft.level.dimension() == key) {
+			FLAT.put(key, isFlat(minecraft.level));
+		}
+		return FLAT.getOrDefault(key, false);
+	}
+
+	private static boolean isFlat(ClientLevel level) {
+		return level.getLevelData().getHorizonHeight(level) <= level.getMinY();
 	}
 }

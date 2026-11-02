@@ -8,6 +8,8 @@ import dev.ryan.seamlessportals.server.PayloadSender;
 import dev.ryan.seamlessportals.server.PortalViewServer;
 import dev.ryan.seamlessportals.server.Renamed;
 import dev.ryan.seamlessportals.server.ServerConfig;
+import dev.ryan.seamlessportals.server.StarfieldPack;
+import dev.ryan.seamlessportals.server.StarfieldPanels;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,6 +78,8 @@ public class SeamlessPortals implements ModInitializer {
 		CustomPortals.init((player, node) -> !node.endsWith("*") && player.checkPermission(id(node), PermissionLevel.GAMEMASTERS),
 				PortalStore::save);
 		ServerLifecycleEvents.SERVER_STARTED.register(PortalStore::load);
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> writePack());
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> StarfieldPanels.clear());
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> PortalStore.unload());
 		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> PortalCommand.register(dispatcher));
 		AttackBlockCallback.EVENT.register((player, level, hand, pos, direction) ->
@@ -140,4 +144,17 @@ public class SeamlessPortals implements ModInitializer {
 			return defaults;
 		}
 	}
+
+	/** The resource pack starfield portals need, for players without the mod: for the server's pack (see README). */
+	private static void writePack() {
+		Path pack = FabricLoader.getInstance().getConfigDir().resolve("seamlessportals").resolve("resource pack.zip");
+		try {
+			if (StarfieldPack.write(pack)) {
+				LOGGER.info("Wrote the SeamlessPortals resource pack (for starfield portals) to {}: add it to the server's resource packs.", pack);
+			}
+		} catch (IOException e) {
+			LOGGER.warn("Couldn't write the SeamlessPortals resource pack: {}", e.getMessage());
+		}
+	}
+
 }

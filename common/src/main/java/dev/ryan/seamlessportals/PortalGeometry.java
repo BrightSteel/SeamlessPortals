@@ -57,14 +57,17 @@ public record PortalGeometry(PortalEnd sourceEnd, PortalEnd destEnd, Vec3 source
 	/** The centre of an end's opening, on its plane. */
 	public static Vec3 center(PortalEnd end) {
 		Vec3 extent = absolute(end.right()).scale(end.width()).add(absolute(end.up()).scale(end.height()));
-		Vec3 inPlane = Vec3.atLowerCornerOf(end.min()).add(extent.scale(0.5));
+		Vec3 inPlane = Vec3.atLowerCornerOf(end.min()).add(extent.scale(0.5))
+				// moved off the blocks' middle by uneven insets
+				.add(unit(end.right()).scale((end.insets().left() - end.insets().right()) / 32.0))
+				.add(unit(end.up()).scale((end.insets().bottom() - end.insets().top()) / 32.0));
 		// the plane's coordinate along the normal axis: block start + surface sixteenths
 		Vec3 normalAxis = absolute(end.facing());
 		double planeCoordinate = normalAxis.dot(Vec3.atLowerCornerOf(end.min())) + end.surface() / 16.0;
 		return inPlane.subtract(normalAxis.scale(normalAxis.dot(inPlane))).add(normalAxis.scale(planeCoordinate));
 	}
 
-	/** The end's blocks' bounding box. */
+	/** The end's blocks' bounding box (insets ignored: the opening is within it). */
 	public static AABB box(PortalEnd end) {
 		Vec3 start = Vec3.atLowerCornerOf(end.min());
 		Vec3 extent = absolute(end.right()).scale(end.width()).add(absolute(end.up()).scale(end.height())).add(absolute(end.facing()));
@@ -117,8 +120,16 @@ public record PortalGeometry(PortalEnd sourceEnd, PortalEnd destEnd, Vec3 source
 		}
 		Vec3 hit = from.add(to.subtract(from).scale(before / (before - after)));
 		Vec3 local = hit.subtract(this.sourceCenter);
-		return Math.abs(local.dot(unit(this.sourceEnd.right()))) <= this.sourceEnd.width() / 2.0
-				&& Math.abs(local.dot(unit(this.sourceEnd.up()))) <= this.sourceEnd.height() / 2.0;
+		return Math.abs(local.dot(unit(this.sourceEnd.right()))) <= this.sourceEnd.halfWidth()
+				&& Math.abs(local.dot(unit(this.sourceEnd.up()))) <= this.sourceEnd.halfHeight();
+	}
+
+	/**
+	 * Whether the segment {@code from → to} goes through the source portal: crosses its opening,
+	 * from its front if it only works that way.
+	 */
+	public boolean entersSource(Vec3 from, Vec3 to) {
+		return this.crossesSource(from, to) && (!this.sourceEnd.frontOnly() || from.subtract(this.sourceCenter).dot(this.sourceNormal) > 0);
 	}
 
 	/** Corners of the source portal opening, pushed {@code offset} blocks toward {@code eye} along the normal. */
@@ -133,8 +144,8 @@ public record PortalGeometry(PortalEnd sourceEnd, PortalEnd destEnd, Vec3 source
 			side = 1;
 		}
 		Vec3 shift = this.sourceNormal.scale(side * offset);
-		Vec3 along = unit(this.sourceEnd.right()).scale(this.sourceEnd.width() / 2.0 + margin);
-		Vec3 across = unit(this.sourceEnd.up()).scale(this.sourceEnd.height() / 2.0 + margin);
+		Vec3 along = unit(this.sourceEnd.right()).scale(this.sourceEnd.halfWidth() + margin);
+		Vec3 across = unit(this.sourceEnd.up()).scale(this.sourceEnd.halfHeight() + margin);
 		Vec3 c = this.sourceCenter.add(shift);
 		return new Vec3[] {
 				c.subtract(along).subtract(across),

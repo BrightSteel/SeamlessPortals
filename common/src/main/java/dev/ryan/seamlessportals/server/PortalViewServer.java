@@ -113,6 +113,11 @@ public final class PortalViewServer {
 		return config;
 	}
 
+	/** Whether the player's client has the mod (it takes our payloads). */
+	static boolean hasMod(ServerPlayer player) {
+		return sender != null && sender.canReceive(player);
+	}
+
 	/** Called once by the platform (Fabric mod or Paper plugin) before the first tick. */
 	public static void init(PayloadSender payloadSender, ServerConfig serverConfig) {
 		sender = payloadSender;
@@ -161,6 +166,7 @@ public final class PortalViewServer {
 
 	private static void tickPlayers(MinecraftServer server) {
 		CustomPortalTravel.tick(server);
+		StarfieldPanels.tick(server);
 		RandomDestinations.tick(server);
 		PortalWands.tick(server);
 		if (server.getTickCount() % CustomPortalBlocks.REPAIR_INTERVAL == 0) {
@@ -200,7 +206,7 @@ public final class PortalViewServer {
 		}
 		Vec3 center = Vec3.atCenterOf(pos);
 		for (PortalLink link : state.links) {
-			if (seamless(player.level(), link) && PortalGeometry.box(link.source()).contains(center)) {
+			if (!link.source().fill().blockless() && seamless(player.level(), link) && PortalGeometry.box(link.source()).contains(center)) {
 				return true;
 			}
 		}
@@ -286,7 +292,7 @@ public final class PortalViewServer {
 		}
 		for (PortalLink link : state.links) {
 			PortalGeometry geometry = PortalGeometry.of(link);
-			boolean crossed = geometry.horizontal() ? geometry.crossesSource(lastFeet, feet) : geometry.crossesSource(lastEye, eye);
+			boolean crossed = geometry.horizontal() ? geometry.entersSource(lastFeet, feet) : geometry.entersSource(lastEye, eye);
 			if (!crossed || !seamless(level, link) || CustomPortals.at(level, link.min()) != null) {
 				continue; // custom portals are travelled by CustomPortalTravel, for everyone
 			}

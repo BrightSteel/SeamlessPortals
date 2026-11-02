@@ -8,5 +8,16 @@ public enum PortalFill {
 	END_PORTAL,
 	END_GATEWAY,
 	WATER,
-	LAVA
+	LAVA,
+	/**
+	 * No blocks (it may lie over other blocks, or another portal's): things still go through it,
+	 * but only players with the mod see it. Any way up.
+	 */
+	WINDOW,
+	/**
+	 * No blocks, like {@link #WINDOW}, and to players without the mod an end gateway's starfield
+	 * exactly the size of the opening (insets included): a display entity, drawn by the
+	 * SeamlessPortals resource pack.
+	 */
+	STARFIELD
 }

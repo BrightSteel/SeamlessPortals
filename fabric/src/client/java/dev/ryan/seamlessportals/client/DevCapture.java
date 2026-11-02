@@ -11,7 +11,7 @@ import net.minecraft.client.Screenshot;
  */
 final class DevCapture {
 	static final boolean ENABLED = Boolean.getBoolean("seamlessportals.devCapture");
-	private static final int INTERVAL_TICKS = 60;
+	private static final int INTERVAL_TICKS = Integer.getInteger("seamlessportals.devCaptureTicks", 60);
 	private static int ticks;
 	private static int shot;
 

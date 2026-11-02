@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.ryan.seamlessportals.net.PortalEnd;
 import dev.ryan.seamlessportals.net.PortalFill;
+import dev.ryan.seamlessportals.net.PortalInsets;
 import dev.ryan.seamlessportals.server.CustomPortal;
 import dev.ryan.seamlessportals.server.CustomPortals;
 import dev.ryan.seamlessportals.server.Renamed;
@@ -99,6 +100,12 @@ final class PortalStore {
 		json.addProperty("width", end.width());
 		json.addProperty("height", end.height());
 		json.addProperty("surface", end.surface());
+		if (end.frontOnly()) {
+			json.addProperty("frontOnly", true);
+		}
+		if (!end.insets().isNone()) {
+			json.add("insets", array(end.insets().left(), end.insets().right(), end.insets().bottom(), end.insets().top()));
+		}
 		json.addProperty("fill", end.fill().name().toLowerCase(Locale.ROOT));
 		json.addProperty("public", portal.access().setting());
 		JsonObject destination = new JsonObject();
@@ -125,6 +132,11 @@ final class PortalStore {
 				json.get("width").getAsInt(), json.get("height").getAsInt(),
 				json.has("surface") ? json.get("surface").getAsInt() : 8,
 				PortalFill.valueOf(json.has("fill") ? json.get("fill").getAsString().toUpperCase(Locale.ROOT) : "NETHER_PORTAL"));
+		end = end.withFrontOnly(json.has("frontOnly") && json.get("frontOnly").getAsBoolean());
+		if (json.has("insets")) {
+			JsonArray insets = json.getAsJsonArray("insets");
+			end = end.withInsets(new PortalInsets(insets.get(0).getAsInt(), insets.get(1).getAsInt(), insets.get(2).getAsInt(), insets.get(3).getAsInt()));
+		}
 		CustomPortal.Destination destination = new CustomPortal.Destination.None();
 		JsonObject dest = json.has("destination") ? json.getAsJsonObject("destination") : new JsonObject();
 		if (dest.has("portal")) {

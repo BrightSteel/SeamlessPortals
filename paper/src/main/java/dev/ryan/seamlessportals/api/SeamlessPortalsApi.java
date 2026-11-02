@@ -73,4 +73,24 @@ public interface SeamlessPortalsApi {
 	Portal setFill(String name, PortalFill fill);
 
 	Portal setAccess(String name, PortalAccess access);
+
+	/**
+	 * Where the opening's plane sits in its row of blocks, in sixteenths of a block along the
+	 * facing axis (0 = the side toward lower coordinates, 8 = the middle, the default; 16 = the
+	 * other side): set back behind something in the opening, or level with a surface.
+	 */
+	Portal setSurface(String name, int sixteenths);
+
+	/**
+	 * Pulls the opening in from its blocks' edges, in sixteenths of a block on each side as seen
+	 * from its front (left and right along its width, bottom and top along its height): for an
+	 * opening narrower than whole blocks, such as a doorway in a model. Moving a portal resets them.
+	 */
+	Portal setInsets(String name, int left, int right, int bottom, int top);
+
+	/**
+	 * Makes the portal work only from its front: what goes in from behind just passes the
+	 * opening by (say a doorway you may step out of backward, or land behind).
+	 */
+	Portal setFrontOnly(String name, boolean frontOnly);
 }
