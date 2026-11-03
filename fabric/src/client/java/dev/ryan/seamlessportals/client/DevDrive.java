@@ -22,8 +22,8 @@ import java.util.List;
  *   <li>{@code look <yaw> <pitch>}: face that way;</li>
  *   <li>{@code step <ticks> <forward> <strafe> <yaw per tick> <pitch per tick>}: hold the
  *       movement keys (forward and strafe -1, 0 or 1) and turn, for that many ticks;</li>
- *   <li>{@code record <name>} / {@code stop}: save each tick's frame as
- *       {@code drive_<name>_<n>.png}, or stop;</li>
+ *   <li>{@code record <name> [every]} / {@code stop}: save each tick's frame (with
+ *       {@code every}, every frame) as {@code drive_<name>_<n>.png}, or stop;</li>
  *   <li>{@code respawn}: respawns, if dead;</li>
  *   <li>{@code use}: right-clicks (as the use key, if it's the default one);</li>
  *   <li>{@code command <command>}: runs the command (no slash) as the player;</li>
@@ -41,6 +41,8 @@ final class DevDrive {
 	private static String recording;
 	private static int frame;
 	private static boolean frameDue;
+	/** Whether every frame is saved while recording, not just one a tick. */
+	private static boolean everyFrame;
 	/** Whether the script's holding the movement keys. */
 	private static boolean driving;
 
@@ -89,6 +91,7 @@ final class DevDrive {
 				}
 				case "record" -> {
 					recording = step[1];
+					everyFrame = step.length > 2 && step[2].equals("every");
 					frame = 0;
 				}
 				case "stop" -> recording = null;
@@ -218,7 +221,7 @@ final class DevDrive {
 
 	/** After the frame's level and portals are drawn: saves it if recording (once a tick). */
 	static void frame(Minecraft minecraft) {
-		if (recording == null || !frameDue) {
+		if (recording == null || !frameDue && !everyFrame) {
 			return;
 		}
 		frameDue = false;

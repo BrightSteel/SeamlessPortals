@@ -6,6 +6,7 @@
 		"AbstractEndPortalRendererMixin",
 		"CameraAccessor",
 		"ChunkFadeMixin",
+		"RemoteChunkFadeMixin",
 		"ClientPacketListenerAccessor",
 		"ChunkPacketDataAccessor",
 		"ClientLevelClockMixin",

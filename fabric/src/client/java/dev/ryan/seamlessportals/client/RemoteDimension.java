@@ -75,6 +75,11 @@ public final class RemoteDimension implements AutoCloseable {
 
 	final ResourceKey<Level> key;
 	final ClientLevel level;
+	/**
+	 * Whether entities have arrived since its level last ticked: they draw nothing until their
+	 * first tick (a display's render state is made there), so a view drawn meanwhile misses them.
+	 */
+	boolean entitiesUnticked;
 	final LevelRenderState renderState = new LevelRenderState();
 	final RemoteLevelRenderer renderer;
 	final FogRenderer fog = new FogRenderer();
@@ -380,6 +385,7 @@ public final class RemoteDimension implements AutoCloseable {
 		}
 		this.level.update();
 		this.level.tickEntities();
+		this.entitiesUnticked = false;
 		if (this.camera.isInitialized()) {
 			this.camera.attributeProbe().tick(this.level, this.camera.position());
 		}

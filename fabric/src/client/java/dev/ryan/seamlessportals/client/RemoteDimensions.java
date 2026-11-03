@@ -18,11 +18,13 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.GameProtocols;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -549,13 +551,29 @@ public final class RemoteDimensions {
 		ClientPacketListenerAccessor listener = (ClientPacketListenerAccessor) connection;
 		ClientLevel playerLevel = listener.seamlessportals$getLevel();
 		try {
+			List<Integer> added = new ArrayList<>();
+			for (Packet<ClientGamePacketListener> packet : packets) {
+				if (packet instanceof ClientboundAddEntityPacket add) {
+					added.add(add.getId());
+				}
+			}
 			for (RemoteDimension view : VIEWS.get(dest)) {
 				listener.seamlessportals$setLevel(view.level);
+				view.entitiesUnticked |= !added.isEmpty();
 				for (Packet<ClientGamePacketListener> packet : packets) {
 					try {
 						packet.handle(connection);
 					} catch (RuntimeException e) {
 						LOGGER.debug("Remote entity packet failed for {}: {}", dest.identifier(), e.toString());
+					}
+				}
+				// A display shows nothing, and takes no transformation to interpolate from, until
+				// its first tick: ticked now, as it arrives. Otherwise a change arriving before
+				// that tick (a door that starts to swing as it's sent) is where it first shows,
+				// already swung.
+				for (int id : added) {
+					if (view.level.getEntity(id) instanceof Display display) {
+						display.tick();
 					}
 				}
 			}

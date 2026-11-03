@@ -459,10 +459,11 @@ public final class PortalViewRenderer {
 	/**
 	 * Whether {@code view} has the far end of {@code link} meshed: the sections its opening's in
 	 * and those beside them (its chunk's neighbours'), so it shows what's around the far end
-	 * whole, entities too (they're drawn only in meshed sections), not a part of it.
+	 * whole, entities too (they're drawn only in meshed sections, and only once they've ticked:
+	 * the server sends a new link's entities before it), not a part of it.
 	 */
 	private static boolean ready(Link link, RemoteDimension view) {
-		if (view.renderer.renderedSections() == 0) {
+		if (view.renderer.renderedSections() == 0 || view.entitiesUnticked) {
 			return false;
 		}
 		Set<Long> sections = new HashSet<>();
