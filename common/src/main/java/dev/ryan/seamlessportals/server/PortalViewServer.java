@@ -35,6 +35,7 @@ import net.minecraft.world.level.block.entity.TheEndPortalBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.feature.EndPlatformFeature;
 import net.minecraft.world.level.storage.LevelData;
@@ -739,7 +740,15 @@ public final class PortalViewServer {
 		return out;
 	}
 
+	/**
+	 * The chunk packet a client would get for {@code chunk}, blocks shown as the platform's hooks
+	 * say (plugins' custom blocks, see {@link PortalHooks#looks}): those sections are swapped for
+	 * changed copies while it's encoded, then put back. Only how blocks look differs in them (the
+	 * same blocks, other states), so anything reading the chunk meanwhile is none the worse.
+	 */
 	private static byte[] encodeChunk(ServerLevel level, LevelChunk chunk) {
+		LevelChunkSection[] sections = chunk.getSections();
+		LevelChunkSection[] originals = looked(level, chunk, sections);
 		RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), level.registryAccess());
 		try {
 			ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(
@@ -749,7 +758,50 @@ public final class PortalViewServer {
 			return bytes;
 		} finally {
 			buf.release();
+			if (originals != null) {
+				System.arraycopy(originals, 0, sections, 0, sections.length);
+			}
 		}
+	}
+
+	/** Swaps in copies of the sections with blocks that look like something else; returns the originals (null if none changed). */
+	private static LevelChunkSection[] looked(ServerLevel level, LevelChunk chunk, LevelChunkSection[] sections) {
+		PortalHooks hooks = PortalAdmin.hooks();
+		LevelChunkSection[] originals = null;
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int x0 = chunk.getPos().getMinBlockX(), z0 = chunk.getPos().getMinBlockZ();
+		for (int i = 0; i < sections.length; i++) {
+			LevelChunkSection section = sections[i];
+			if (section.hasOnlyAir() || !section.maybeHas(hooks::mayChangeLooks)) {
+				continue;
+			}
+			int y0 = level.getSectionYFromSectionIndex(i) << 4;
+			LevelChunkSection copy = null;
+			for (int y = 0; y < 16; y++) {
+				for (int z = 0; z < 16; z++) {
+					for (int x = 0; x < 16; x++) {
+						BlockState state = section.getBlockState(x, y, z);
+						if (!hooks.mayChangeLooks(state)) {
+							continue;
+						}
+						BlockState looks = hooks.looks(level, pos.set(x0 + x, y0 + y, z0 + z), state);
+						if (looks != null && looks != state) {
+							if (copy == null) {
+								copy = section.copy();
+							}
+							copy.setBlockState(x, y, z, looks, false);
+						}
+					}
+				}
+			}
+			if (copy != null) {
+				if (originals == null) {
+					originals = sections.clone();
+				}
+				sections[i] = copy;
+			}
+		}
+		return originals;
 	}
 
 	private static final class PlayerState {

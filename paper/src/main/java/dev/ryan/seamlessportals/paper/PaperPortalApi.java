@@ -1,5 +1,6 @@
 package dev.ryan.seamlessportals.paper;
 
+import dev.ryan.seamlessportals.api.BlockLooks;
 import dev.ryan.seamlessportals.api.SeamlessPortalsApi;
 import dev.ryan.seamlessportals.api.Portal;
 import dev.ryan.seamlessportals.api.PortalAccess;
@@ -101,6 +102,23 @@ final class PaperPortalApi implements SeamlessPortalsApi {
 	@Override
 	public Portal setFrontOnly(String name, boolean frontOnly) {
 		return this.change(name, () -> PortalAdmin.setFrontOnly(name, frontOnly));
+	}
+
+	@Override
+	public Portal setPanelDepth(String name, int sixteenths) {
+		return this.change(name, () -> PortalAdmin.setPanelDepth(name, sixteenths));
+	}
+
+	@Override
+	public void addBlockLooks(BlockLooks looks) {
+		PaperPortalHooks.LOOKS.add(looks);
+		PaperPortalHooks.MAY_CHANGE.clear();
+	}
+
+	@Override
+	public void removeBlockLooks(BlockLooks looks) {
+		PaperPortalHooks.LOOKS.remove(looks);
+		PaperPortalHooks.MAY_CHANGE.clear();
 	}
 
 	/** Runs an operation and returns the portal {@code name} after it. */

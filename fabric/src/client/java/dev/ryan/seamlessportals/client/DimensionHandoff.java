@@ -794,10 +794,24 @@ public final class DimensionHandoff {
 		}
 	}
 
+	/** Highest the player's lifted out of a floor they'd arrive in, and by how little at a time: as the server does (TravelCompanions.clear). */
+	private static final double MAX_LIFT = 0.6;
+	private static final double LIFT_STEP = 1.0 / 64.0;
+
 	private static void placeAtArrival() {
 		LocalPlayer player = Minecraft.getInstance().player;
 		if (arrivalPosition != null && player != null) {
-			player.snapTo(arrivalPosition.x, arrivalPosition.y, arrivalPosition.z, arrivalYRot, arrivalXRot);
+			// The far side's floor needn't be level with the near side's ground: lifted onto it as
+			// the server lifts them, or the server corrects them (and stops them dead).
+			Vec3 at = arrivalPosition;
+			for (double lift = 0.0; lift <= MAX_LIFT; lift += LIFT_STEP) {
+				Vec3 lifted = arrivalPosition.add(0.0, lift, 0.0);
+				if (player.level().noCollision(player, player.getDimensions(player.getPose()).makeBoundingBox(lifted))) {
+					at = lifted;
+					break;
+				}
+			}
+			player.snapTo(at.x, at.y, at.z, arrivalYRot, arrivalXRot);
 			player.setDeltaMovement(arrivalVelocity);
 		}
 	}

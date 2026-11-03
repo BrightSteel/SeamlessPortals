@@ -161,7 +161,7 @@ public final class PortalAdmin {
 		CustomPortal portal = existing(name);
 		Direction realUp = up != null ? up : facing.getAxis() == Direction.Axis.Y ? Direction.SOUTH : Direction.UP;
 		PortalEnd end = opening(level, BlockPos.min(a, b), BlockPos.max(a, b), facing, realUp, portal.end().fill(), portal);
-		CustomPortal moved = new CustomPortal(portal.name(), level.dimension().identifier().toString(), end, portal.destination(), portal.access());
+		CustomPortal moved = new CustomPortal(portal.name(), level.dimension().identifier().toString(), end, portal.destination(), portal.access(), portal.panelDepth());
 		change(portal, moved);
 		ServerLevel from = CustomPortals.level(server, portal.world());
 		if (from != null) {
@@ -281,6 +281,21 @@ public final class PortalAdmin {
 		change(portal, after);
 		CustomPortals.put(after);
 		return "'" + portal.name() + "' now " + (frontOnly ? "only takes what goes in from its front." : "works from both sides.");
+	}
+
+	/**
+	 * How far back from the opening (sixteenths) a starfield portal's panel is drawn, for players
+	 * who don't see it live: behind something in the opening, such as doors swinging open.
+	 */
+	public static String setPanelDepth(String name, int sixteenths) {
+		CustomPortal portal = existing(name);
+		if (sixteenths < 0 || sixteenths > 64) {
+			throw new IllegalArgumentException("The panel's depth is 0 to 64 sixteenths.");
+		}
+		CustomPortal after = portal.withPanelDepth(sixteenths);
+		change(portal, after);
+		CustomPortals.put(after);
+		return "'" + portal.name() + "''s starfield is now drawn " + sixteenths + " sixteenths back.";
 	}
 
 	private static String describe(PortalInsets insets) {

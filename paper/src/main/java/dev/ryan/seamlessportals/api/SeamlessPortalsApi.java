@@ -93,4 +93,21 @@ public interface SeamlessPortalsApi {
 	 * opening by (say a doorway you may step out of backward, or land behind).
 	 */
 	Portal setFrontOnly(String name, boolean frontOnly);
+
+	/**
+	 * How far back from its opening (sixteenths of a block, 0 to 64) a starfield portal's
+	 * starfield is drawn for players who don't see through it live (without the client mod):
+	 * behind something in the opening, such as doors swinging open, so it's seen in front.
+	 */
+	Portal setPanelDepth(String name, int sixteenths);
+
+	/**
+	 * Has portal views show blocks as {@code looks} says (see {@link BlockLooks}): for plugins
+	 * that show blocks as others by rewriting chunk packets. Chunks already sent keep their looks
+	 * until they change.
+	 */
+	void addBlockLooks(BlockLooks looks);
+
+	/** Stops asking {@code looks} (when its plugin's disabled, say). */
+	void removeBlockLooks(BlockLooks looks);
 }

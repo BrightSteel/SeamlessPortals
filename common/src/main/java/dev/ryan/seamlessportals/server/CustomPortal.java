@@ -7,8 +7,15 @@ import dev.ryan.seamlessportals.net.PortalEnd;
  * in the world {@code world} (a dimension id such as {@code minecraft:overworld}), leading to
  * {@link #destination}. Who may see through it and use it is {@link #access} plus the
  * {@code seamlessportals.see.<name>} and {@code seamlessportals.use.<name>} permissions (use grants see).
+ * {@code panelDepth} is how far back from the opening (sixteenths) a starfield portal's panel
+ * is drawn for players who don't see it live (see StarfieldPanels): behind something in the
+ * opening, such as doors swinging open.
  */
-public record CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access) {
+public record CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access, int panelDepth) {
+	public CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access) {
+		this(name, world, end, destination, access, 0);
+	}
+
 	/** What everyone may do with a portal, before permissions. */
 	public enum Access {
 		/** Only players with permission see through it or use it. */
@@ -38,15 +45,19 @@ public record CustomPortal(String name, String world, PortalEnd end, Destination
 	}
 
 	public CustomPortal withDestination(Destination destination) {
-		return new CustomPortal(this.name, this.world, this.end, destination, this.access);
+		return new CustomPortal(this.name, this.world, this.end, destination, this.access, this.panelDepth);
 	}
 
 	public CustomPortal withEnd(PortalEnd end) {
-		return new CustomPortal(this.name, this.world, end, this.destination, this.access);
+		return new CustomPortal(this.name, this.world, end, this.destination, this.access, this.panelDepth);
 	}
 
 	public CustomPortal withAccess(Access access) {
-		return new CustomPortal(this.name, this.world, this.end, this.destination, access);
+		return new CustomPortal(this.name, this.world, this.end, this.destination, access, this.panelDepth);
+	}
+
+	public CustomPortal withPanelDepth(int panelDepth) {
+		return new CustomPortal(this.name, this.world, this.end, this.destination, this.access, panelDepth);
 	}
 
 	/** Where a custom portal leads. */

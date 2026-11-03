@@ -57,7 +57,7 @@ public final class StarfieldPanels {
 	private static final Map<String, Panel> PANELS = new HashMap<>();
 
 	/** One portal's panel: the display it's drawn with, and who has it (the player object, so a respawn counts as new). */
-	private record Panel(PortalEnd end, String world, Display.ItemDisplay display, Map<UUID, ServerPlayer> viewers) {
+	private record Panel(PortalEnd end, int depth, String world, Display.ItemDisplay display, Map<UUID, ServerPlayer> viewers) {
 	}
 
 	private StarfieldPanels() {
@@ -78,11 +78,11 @@ public final class StarfieldPanels {
 			}
 			live.add(portal.name());
 			Panel panel = PANELS.get(portal.name());
-			if (panel == null || !panel.end().equals(portal.end()) || !panel.world().equals(portal.world())) {
+			if (panel == null || !panel.end().equals(portal.end()) || panel.depth() != portal.panelDepth() || !panel.world().equals(portal.world())) {
 				if (panel != null) {
 					takeBackAll(panel);
 				}
-				panel = new Panel(portal.end(), portal.world(), display(level, portal.end()), new HashMap<>());
+				panel = new Panel(portal.end(), portal.panelDepth(), portal.world(), display(level, portal.end(), portal.panelDepth()), new HashMap<>());
 				PANELS.put(portal.name(), panel);
 			}
 			boolean linked = CustomPortals.link(server, portal) != null;
@@ -137,12 +137,13 @@ public final class StarfieldPanels {
 	}
 
 	/**
-	 * The display for {@code end}: at its opening's centre, the panel (a 1×1 square facing +Z
-	 * in the item model) turned to face the way the portal does and stretched to its opening.
+	 * The display for {@code end}: at its opening's centre (moved {@code depth} sixteenths back),
+	 * the panel (a 1×1 square facing +Z in the item model) turned to face the way the portal
+	 * does and stretched to its opening.
 	 */
-	private static Display.ItemDisplay display(ServerLevel level, PortalEnd end) {
+	private static Display.ItemDisplay display(ServerLevel level, PortalEnd end, int depth) {
 		Display.ItemDisplay display = new Display.ItemDisplay(ITEM_DISPLAY, level);
-		Vec3 center = PortalGeometry.center(end);
+		Vec3 center = PortalGeometry.center(end).subtract(Vec3.atLowerCornerOf(end.facing().getUnitVec3i()).scale(depth / 16.0));
 		display.setPos(center.x, center.y, center.z);
 		ItemStack item = new ItemStack(BuiltInRegistries.ITEM.getValue(Identifier.withDefaultNamespace("black_concrete")));
 		item.set(DataComponents.CUSTOM_MODEL_DATA, new CustomModelData(List.of(), List.of(), List.of(MODEL_DATA), List.of()));

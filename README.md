@@ -77,6 +77,23 @@ Events in `dev.ryan.seamlessportals.api.event`, all cancellable: `PortalCreateEv
 through a portal (custom portals, and mod players through nether and end portals). Its
 `setTo` sends the trip somewhere else, as an ordinary teleport.
 
+**Custom blocks in portal views (Paper).** Portal views send the far side's chunks in their own
+packets, of another world than the player's, so plugins that show blocks as others by rewriting
+chunk packets (custom blocks drawn from note block or tripwire states, say) never see them, and
+those blocks show as the vanilla block underneath. Such a plugin registers a `BlockLooks` to be
+asked instead, with the right world:
+
+```java
+SeamlessPortalsApi.get().addBlockLooks(new BlockLooks() {
+	public boolean mayChange(BlockData state) { return state.getMaterial() == Material.NOTE_BLOCK; }
+	public BlockData looks(World world, int x, int y, int z, BlockData state) { return myCustomLookAt(world, x, y, z); }
+});
+```
+
+Plugins whose custom blocks are real block states on the server need nothing: portal views show
+what's there. (Running portal views through other plugins' packet listeners instead wouldn't
+work: they'd read the chunk with the player's own world and height.)
+
 **Fabric.** Depend on the SeamlessPortals mod; `dev.ryan.seamlessportals.api.SeamlessPortalsApi` has the
 same operations with Minecraft types, and `SeamlessPortalsEvents` has `CREATE`, `CHANGE`, `DELETE`
 and `TRAVEL` (return false, or null for a trip, to stop it).

@@ -133,10 +133,17 @@ public final class SeamlessPortalsPlugin extends JavaPlugin implements Listener 
 		}
 	}
 
+	/**
+	 * Development aid: players named in {@code -Dseamlessportals.devVanilla=<name,name>} are
+	 * treated as not having the client mod, to see what such players see with a modded client.
+	 */
+	private static final java.util.Set<String> DEV_VANILLA = java.util.Set.of(System.getProperty("seamlessportals.devVanilla", "").split(","));
+
 	private final class PluginMessageSender implements PayloadSender {
 		@Override
 		public boolean canReceive(ServerPlayer player) {
-			return player.getBukkitEntity().getListeningPluginChannels().contains(PortalLinksPayload.ID.toString());
+			return player.getBukkitEntity().getListeningPluginChannels().contains(PortalLinksPayload.ID.toString())
+					&& !DEV_VANILLA.contains(player.getBukkitEntity().getName());
 		}
 
 		@Override

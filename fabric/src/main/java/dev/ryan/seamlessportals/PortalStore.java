@@ -108,6 +108,9 @@ final class PortalStore {
 		}
 		json.addProperty("fill", end.fill().name().toLowerCase(Locale.ROOT));
 		json.addProperty("public", portal.access().setting());
+		if (portal.panelDepth() != 0) {
+			json.addProperty("panelDepth", portal.panelDepth());
+		}
 		JsonObject destination = new JsonObject();
 		switch (portal.destination()) {
 			case CustomPortal.Destination.Portal(String partner) -> destination.addProperty("portal", partner);
@@ -149,7 +152,8 @@ final class PortalStore {
 					pos.get(0).getAsDouble(), pos.get(1).getAsDouble(), pos.get(2).getAsDouble(),
 					dest.has("yaw") ? dest.get("yaw").getAsFloat() : 0.0F, dest.has("pitch") ? dest.get("pitch").getAsFloat() : 0.0F);
 		}
-		return new CustomPortal(name, json.get("world").getAsString(), end, destination, CustomPortal.Access.parse(json.has("public") ? json.get("public").getAsString() : "false"));
+		return new CustomPortal(name, json.get("world").getAsString(), end, destination, CustomPortal.Access.parse(json.has("public") ? json.get("public").getAsString() : "false"),
+				json.has("panelDepth") ? json.get("panelDepth").getAsInt() : 0);
 	}
 
 	private static JsonArray array(Number... values) {
