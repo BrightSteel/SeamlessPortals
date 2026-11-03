@@ -195,13 +195,13 @@ public final class PortalViewServer {
 			if (!sender.canReceive(player)) {
 				continue; // without the client mod: nothing to stream, and vanilla travel
 			}
-			if (scan) {
-				update(server, player, now);
-			}
+			boolean synced = scan && update(server, player, now);
 			if (travelThroughPortal(server, player)) {
 				continue;
 			}
-			syncEntities(server, player, now);
+			if (!synced) {
+				syncEntities(server, player, now);
+			}
 		}
 	}
 
@@ -397,7 +397,8 @@ public final class PortalViewServer {
 
 	// ── portal discovery ────────────────────────────────────────────────────
 
-	private static void update(MinecraftServer server, ServerPlayer player, int now) {
+	/** Finds the player's portals and streams their far sides; true if it synced their entities this tick too. */
+	private static boolean update(MinecraftServer server, ServerPlayer player, int now) {
 		PlayerState state = PLAYERS.computeIfAbsent(player.getUUID(), id -> new PlayerState());
 		ServerLevel level = player.level();
 		if (level.dimension() != state.streamedFrom) {
@@ -410,19 +411,26 @@ public final class PortalViewServer {
 			state.linksSent = false;
 		}
 		List<PortalLink> links = findLinks(server, player, now);
-		if (!state.linksSent || !links.equals(state.links)) {
-			// Sent once per world even when empty: that's how a client knows it has a server
-			// half to stream to it (otherwise it may draw recorded portals of its own).
-			state.linksSent = true;
-			state.links = links;
-			sender.send(player, new PortalLinksPayload(links), PortalLinksPayload.STREAM_CODEC);
-		}
+		boolean changed = !state.linksSent || !links.equals(state.links);
+		state.links = links;
 		for (Map.Entry<String, List<Vec3>> entry : streamedCenters(links).entrySet()) {
 			ServerLevel dest = server.getLevel(ResourceKey.create(Registries.DIMENSION, Identifier.parse(entry.getKey())));
 			if (dest != null) {
 				sendChunks(player, state, dest, entry.getKey(), entry.getValue(), now);
 			}
 		}
+		if (!changed) {
+			return false;
+		}
+		// The far sides' chunks and entities first, the links last: a client with a far side's
+		// terrain already (a doorway opened again) draws its view at once, and its mobs and
+		// displays (a room's doors) must be there by then.
+		syncEntities(server, player, now);
+		// Sent once per world even when empty: that's how a client knows it has a server half
+		// to stream to it (otherwise it may draw recorded portals of its own).
+		state.linksSent = true;
+		sender.send(player, new PortalLinksPayload(links), PortalLinksPayload.STREAM_CODEC);
+		return true;
 	}
 
 	/** The portals around the player they may see through, nearest first, at most {@link ServerConfig#maxPortals()}. */

@@ -43,8 +43,9 @@ import java.util.function.Predicate;
  *
  * <p>It polls instead of hooking vanilla's entity tracker: running a second tracker would
  * consume the entity's dirty-data flags out from under real players in that dimension.
- * Full state (pairing packets) is sent once, then positions every tick and the complete
- * entity data / equipment every {@link #FULL_SYNC_TICKS}.</p>
+ * Full state (pairing packets) is sent once, then positions every tick, entity data as soon as
+ * it changes, and the complete entity data / equipment every {@link #FULL_SYNC_TICKS} (but a
+ * display's data only when it changes).</p>
  */
 final class RemoteEntityTracker {
 	/** Vertical reach as a fraction of the horizontal radius; portals look across more than up. */
@@ -100,7 +101,7 @@ final class RemoteEntityTracker {
 		for (Entity entity : nearby) {
 			int id = entity.getId();
 			List<SynchedEntityData.DataValue<?>> data = entity.getEntityData().getNonDefaultValues();
-			int dataHash = data == null ? 0 : data.hashCode();
+			int dataHash = hash(data);
 			if (this.tracked.add(id)) {
 				newServerEntity(level, entity)
 						.sendPairingData(player, packet -> out.add(encode(codec, packet)));
@@ -110,7 +111,10 @@ final class RemoteEntityTracker {
 			out.add(encode(codec, ClientboundEntityPositionSyncPacket.of(entity)));
 			out.add(encode(codec, new ClientboundRotateHeadPacket(entity, Mth.packDegrees(entity.getYHeadRot()))));
 			boolean dataChanged = !this.sentData.containsKey(id) || this.sentData.get(id) != dataHash;
-			if (fullSync || dataChanged) {
+			// Not a display's unchanged data: the client takes any transformation it's sent as a
+			// new one to interpolate to from where it is, over the whole duration again, so a
+			// swing caught mid-way by a full sync would slow to a crawl at its end.
+			if (fullSync && !(entity instanceof Display) || dataChanged) {
 				if (data != null) {
 					out.add(encode(codec, new ClientboundSetEntityDataPacket(id, withInterpolationStart(entity, data))));
 				}
@@ -135,6 +139,25 @@ final class RemoteEntityTracker {
 			out.add(encode(codec, new ClientboundRemoveEntitiesPacket(gone.toIntArray())));
 		}
 		return out;
+	}
+
+	/**
+	 * A hash of entity data that's the same for the same data: item stacks (an item display's,
+	 * a dropped item's) hashed by their contents, not by identity (each read is a fresh copy, so
+	 * the data would look changed every tick, and be sent every tick).
+	 */
+	private static int hash(List<SynchedEntityData.DataValue<?>> data) {
+		if (data == null) {
+			return 0;
+		}
+		int hash = 1;
+		for (SynchedEntityData.DataValue<?> value : data) {
+			int valueHash = value.value() instanceof ItemStack stack
+					? 31 * ItemStack.hashItemAndComponents(stack) + stack.getCount()
+					: java.util.Objects.hashCode(value.value());
+			hash = 31 * hash + 31 * value.id() + valueHash;
+		}
+		return hash;
 	}
 
 	/**
