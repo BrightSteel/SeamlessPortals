@@ -45,6 +45,7 @@ import net.minecraft.world.attribute.EnvironmentAttributeProbe;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -207,6 +208,8 @@ public final class PortalViewRenderer {
 	private static final Map<PortalEnd, Long> LIVE_SINCE = new HashMap<>();
 	/** How long a blockless portal waits for its view to have terrain before it's drawn anyway (ms). */
 	private static final long EMPTY_VIEW_WAIT_MS = 1500;
+	/** The live portals (by their end) whose views have been drawn: never hidden again while live. */
+	private static final Set<PortalEnd> DRAWN = new HashSet<>();
 	private static RenderTarget lastRemoteTarget;
 	private static RenderTarget leftBehind;
 
@@ -418,6 +421,7 @@ public final class PortalViewRenderer {
 		Set<PortalEnd> liveSources = new HashSet<>();
 		live.forEach(link -> liveSources.add(link.link().source()));
 		LIVE_SINCE.keySet().retainAll(liveSources);
+		DRAWN.retainAll(liveSources);
 		// Before the windows: a warm-up pass may use a window's own view, whose image must end
 		// up being the window's.
 		warmBehind(minecraft, main, levelProjection);
@@ -429,14 +433,16 @@ public final class PortalViewRenderer {
 			}
 			try {
 				renderRemote(minecraft, main, link, view, levelProjection, rect);
-				// A portal with no blocks of its own, whose view hasn't any terrain yet (just made,
-				// still meshing): not drawn, so whatever lies behind it shows meanwhile, not an
-				// empty sky. What's behind can be made to match (PaperTardis does). Not for
-				// long, though: a view of the void never has terrain to show.
+				// A portal with no blocks of its own, whose view isn't ready yet (just made: no
+				// terrain, or some of it still meshing, which would show half a room): not drawn,
+				// so whatever lies behind it shows meanwhile, not an empty sky or a room's floor
+				// alone. What's behind can be made to match (PaperTardis does). Not for long,
+				// though: a view of the void never has terrain to show.
 				long since = LIVE_SINCE.computeIfAbsent(link.link().source(), source -> now);
-				if (link.link().source().fill().blockless() && view.renderer.renderedSections() == 0 && now - since < EMPTY_VIEW_WAIT_MS) {
+				if (link.link().source().fill().blockless() && !DRAWN.contains(link.link().source()) && !ready(link, view) && now - since < EMPTY_VIEW_WAIT_MS) {
 					continue;
 				}
+				DRAWN.add(link.link().source());
 				passes.add(new Pass(link, view, view.target));
 				lastRemoteTarget = view.target;
 			} catch (RuntimeException e) {
@@ -448,6 +454,29 @@ public final class PortalViewRenderer {
 			}
 		}
 		assignments = assigned;
+	}
+
+	/**
+	 * Whether {@code view} has the far end of {@code link} meshed: the sections its opening's in
+	 * and those beside them (its chunk's neighbours'), so it shows what's around the far end
+	 * whole, entities too (they're drawn only in meshed sections), not a part of it.
+	 */
+	private static boolean ready(Link link, RemoteDimension view) {
+		if (view.renderer.renderedSections() == 0) {
+			return false;
+		}
+		Set<Long> sections = new HashSet<>();
+		for (BlockPos pos : link.link().dest().blocks()) {
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					BlockPos at = pos.offset(dx * 16, 0, dz * 16);
+					if (sections.add(SectionPos.asLong(at)) && !view.renderer.meshed(at)) {
+						return false;
+					}
+				}
+			}
+		}
+		return true;
 	}
 
 	/**

@@ -67,7 +67,7 @@ public final class CustomPortals {
 	public static void put(CustomPortal portal) {
 		PORTALS.put(portal.name(), portal);
 		reindex();
-		onChange.run();
+		changed();
 	}
 
 	public static void remove(String name) {
@@ -79,7 +79,7 @@ public final class CustomPortals {
 			}
 		}
 		reindex();
-		onChange.run();
+		changed();
 	}
 
 	/** Pairs two portals both ways, unpairing whatever either was paired with before. */
@@ -88,14 +88,19 @@ public final class CustomPortals {
 		unpairPartner(b);
 		PORTALS.computeIfPresent(a, (n, portal) -> portal.withDestination(new CustomPortal.Destination.Portal(b)));
 		PORTALS.computeIfPresent(b, (n, portal) -> portal.withDestination(new CustomPortal.Destination.Portal(a)));
-		onChange.run();
+		changed();
 	}
 
 	/** Sets a portal's destination (one-way target or none), unpairing its old partner. */
 	public static void setDestination(String name, CustomPortal.Destination destination) {
 		unpairPartner(name);
 		PORTALS.computeIfPresent(name, (n, portal) -> portal.withDestination(destination));
+		changed();
+	}
+
+	private static void changed() {
 		onChange.run();
+		PortalViewServer.rescan();
 	}
 
 	private static void unpairPartner(String name) {

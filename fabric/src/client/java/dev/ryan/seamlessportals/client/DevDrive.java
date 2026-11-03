@@ -26,6 +26,7 @@ import java.util.List;
  *       {@code drive_<name>_<n>.png}, or stop;</li>
  *   <li>{@code respawn}: respawns, if dead;</li>
  *   <li>{@code use}: right-clicks (as the use key, if it's the default one);</li>
+ *   <li>{@code command <command>}: runs the command (no slash) as the player;</li>
  *   <li>{@code textclick <x> <y>}: clicks the text there (a dialog's, say) straight through its widget;</li>
  *   <li>{@code press <label>}: presses the button with that label on the screen showing;</li>
  *   <li>{@code shot <name>}: saves the last frame whole, menus and all, as {@code drive_<name>.png};</li>
@@ -93,6 +94,7 @@ final class DevDrive {
 				case "stop" -> recording = null;
 				case "respawn" -> player.respawn();
 				case "use" -> KeyMapping.click(minecraft.options.keyUse.getDefaultKey());
+				case "command" -> player.connection.sendCommand(String.join(" ", java.util.Arrays.copyOfRange(step, 1, step.length)));
 				case "textclick" -> textClick(minecraft, Double.parseDouble(step[1]), Double.parseDouble(step[2]));
 				case "press" -> press(minecraft, String.join(" ", java.util.Arrays.copyOfRange(step, 1, step.length)));
 				case "shot" -> {

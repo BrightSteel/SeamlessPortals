@@ -87,6 +87,11 @@ public final class RemoteLevelRenderer {
 		return this.extractor.countRenderedSections();
 	}
 
+	/** Whether the section holding {@code pos} is meshed (and, where sections fade in, showing). */
+	public boolean meshed(BlockPos pos) {
+		return ClientVersioned.isSectionCompiledAndVisible(this.renderer, pos);
+	}
+
 	public SectionOcclusionGraph sectionOcclusionGraph() {
 		return this.renderer.sectionOcclusionGraph();
 	}

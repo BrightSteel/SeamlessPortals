@@ -73,6 +73,10 @@ import java.util.UUID;
  */
 public final class PortalViewServer {
 	private static final int SCAN_INTERVAL_TICKS = 10;
+	/** How far (chunks) around a destination's own chunk its chunks are all sent at once: its neighbours, with theirs. */
+	private static final int FIRST_CHUNKS_RADIUS = 2;
+	/** Whether the next tick scans, whatever the interval: custom portals changed (a doorway opened, say). */
+	private static volatile boolean rescan;
 	/**
 	 * How often each already-sent chunk is re-encoded and re-sent if it changed. The check is
 	 * spread over the scans in that time (a slice per scan), so it never lands in one tick.
@@ -160,6 +164,14 @@ public final class PortalViewServer {
 		}
 	}
 
+	/**
+	 * Custom portals changed: scan on the next tick, not at the next interval, so a portal made
+	 * or moved shows its far side as soon as it can (a plugin may be timing something to it).
+	 */
+	public static void rescan() {
+		rescan = true;
+	}
+
 	public static void forget(ServerPlayer player) {
 		PLAYERS.remove(player.getUUID());
 		PortalWands.forget(player.getUUID());
@@ -174,7 +186,8 @@ public final class PortalViewServer {
 			CustomPortalBlocks.repair(server);
 		}
 		int now = server.getTickCount();
-		boolean scan = now % SCAN_INTERVAL_TICKS == 0;
+		boolean scan = now % SCAN_INTERVAL_TICKS == 0 || rescan;
+		rescan = false;
 		if (scan) {
 			DESTINATIONS.values().removeIf(cached -> cached.expiresAt < now);
 		}
@@ -679,7 +692,22 @@ public final class PortalViewServer {
 		List<ChunkPos> wanted = new ArrayList<>(wantedSet);
 		Map<Long, Integer> sent = state.sentChunkHashes.computeIfAbsent(destId, d -> new HashMap<>());
 		int budget = config.chunksPerScan();
-		// Chunks not sent yet, nearest first.
+		// The chunks around each destination's own first, all together, past the budget if need
+		// be: the client meshes a chunk only once all its neighbours are there, so a new view
+		// with any missing shows only part of what's around its far end until the next scan or
+		// two (and a portal with no blocks of its own isn't drawn until they're in).
+		for (Vec3 center : centers) {
+			ChunkPos own = ChunkPos.containing(BlockPos.containing(center));
+			for (int dx = -FIRST_CHUNKS_RADIUS; dx <= FIRST_CHUNKS_RADIUS; dx++) {
+				for (int dz = -FIRST_CHUNKS_RADIUS; dz <= FIRST_CHUNKS_RADIUS; dz++) {
+					ChunkPos pos = new ChunkPos(own.x() + dx, own.z() + dz);
+					if (!sent.containsKey(pos.pack()) && sendIfChanged(player, dest, destId, pos, sent)) {
+						budget = Math.max(0, budget - 1);
+					}
+				}
+			}
+		}
+		// Then the chunks not sent yet, nearest first.
 		for (ChunkPos pos : wanted) {
 			if (budget == 0) {
 				return;
