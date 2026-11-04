@@ -65,6 +65,9 @@ public final class CustomPortals {
 	}
 
 	public static void put(CustomPortal portal) {
+		if (portal.equals(PORTALS.get(portal.name()))) {
+			return; // as it was: nothing to send again (its views would be drawn afresh)
+		}
 		PORTALS.put(portal.name(), portal);
 		reindex();
 		changed();

@@ -119,7 +119,7 @@ public final class PortalViewServer {
 	}
 
 	/** Whether the player's client has the mod (it takes our payloads). */
-	static boolean hasMod(ServerPlayer player) {
+	public static boolean hasMod(ServerPlayer player) {
 		return sender != null && sender.canReceive(player);
 	}
 
@@ -172,6 +172,20 @@ public final class PortalViewServer {
 		rescan = true;
 	}
 
+	/**
+	 * Chunks a block's changed in (see {@link #changed}), as "dimension chunk" keys: re-sent on
+	 * the next scan to whoever's been sent them, ahead of everything else. Those this scan's
+	 * taken are in {@link #changing}.
+	 */
+	private static final Set<String> CHANGED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+	private static Set<String> changing = Set.of();
+
+	/** A block changed in that chunk of {@code dimension}: views showing it are sent it on the next tick. */
+	public static void changed(String dimension, int chunkX, int chunkZ) {
+		CHANGED.add(dimension + " " + new ChunkPos(chunkX, chunkZ).pack());
+		rescan = true;
+	}
+
 	public static void forget(ServerPlayer player) {
 		PLAYERS.remove(player.getUUID());
 		PortalWands.forget(player.getUUID());
@@ -190,6 +204,8 @@ public final class PortalViewServer {
 		rescan = false;
 		if (scan) {
 			DESTINATIONS.values().removeIf(cached -> cached.expiresAt < now);
+			changing = Set.copyOf(CHANGED);
+			CHANGED.removeAll(changing);
 		}
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (!sender.canReceive(player)) {
@@ -700,6 +716,15 @@ public final class PortalViewServer {
 		List<ChunkPos> wanted = new ArrayList<>(wantedSet);
 		Map<Long, Integer> sent = state.sentChunkHashes.computeIfAbsent(destId, d -> new HashMap<>());
 		int budget = config.chunksPerScan();
+		// Chunks a block's changed in that this player's been sent, first and past the budget:
+		// someone's likely looking at it (see changed).
+		if (!changing.isEmpty()) {
+			for (Map.Entry<Long, Integer> entry : List.copyOf(sent.entrySet())) {
+				if (changing.contains(destId + " " + entry.getKey())) {
+					sendIfChanged(player, dest, destId, ChunkPos.unpack(entry.getKey()), sent);
+				}
+			}
+		}
 		// The chunks around each destination's own first, all together, past the budget if need
 		// be: the client meshes a chunk only once all its neighbours are there, so a new view
 		// with any missing shows only part of what's around its far end until the next scan or

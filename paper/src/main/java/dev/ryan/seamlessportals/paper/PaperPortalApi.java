@@ -8,8 +8,10 @@ import dev.ryan.seamlessportals.api.PortalException;
 import dev.ryan.seamlessportals.api.PortalFill;
 import dev.ryan.seamlessportals.net.PortalInsets;
 import dev.ryan.seamlessportals.server.CustomPortal;
+import dev.ryan.seamlessportals.server.CustomPortalTravel;
 import dev.ryan.seamlessportals.server.CustomPortals;
 import dev.ryan.seamlessportals.server.PortalAdmin;
+import dev.ryan.seamlessportals.server.PortalViewServer;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import org.bukkit.Bukkit;
@@ -119,6 +121,29 @@ final class PaperPortalApi implements SeamlessPortalsApi {
 	public void removeBlockLooks(BlockLooks looks) {
 		PaperPortalHooks.LOOKS.remove(looks);
 		PaperPortalHooks.MAY_CHANGE.clear();
+	}
+
+	@Override
+	public void refresh(Location location) {
+		this.run(() -> {
+			PortalViewServer.changed(ApiPortals.level(location).dimension().identifier().toString(), location.getBlockX() >> 4, location.getBlockZ() >> 4);
+			return null;
+		});
+	}
+
+	@Override
+	public boolean send(org.bukkit.entity.Player player, String name) {
+		boolean[] sent = new boolean[1];
+		this.run(() -> {
+			sent[0] = CustomPortalTravel.sendThrough(MinecraftServer.getServer(), ((org.bukkit.craftbukkit.entity.CraftPlayer) player).getHandle(), name);
+			return null;
+		});
+		return sent[0];
+	}
+
+	@Override
+	public boolean hasClientMod(org.bukkit.entity.Player player) {
+		return PortalViewServer.hasMod(((org.bukkit.craftbukkit.entity.CraftPlayer) player).getHandle());
 	}
 
 	/** Runs an operation and returns the portal {@code name} after it. */

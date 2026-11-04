@@ -24,7 +24,7 @@ import java.util.UUID;
  * block (nether portal timer, end portal, gateway) is cancelled by the platform for custom
  * portals, so this is the only way through.
  */
-final class CustomPortalTravel {
+public final class CustomPortalTravel {
 	/** How far around an opening entities are watched. */
 	private static final double WATCH_MARGIN = 3.0;
 	/** Largest movement in one tick still treated as moving rather than teleporting. */
@@ -93,6 +93,21 @@ final class CustomPortalTravel {
 			}
 		}
 		LAST.keySet().retainAll(portals);
+	}
+
+	/**
+	 * Sends {@code entity} through the portal {@code name} as if it had walked through it, from
+	 * where it is (mapped through to the far side as a walk through would be): for players with
+	 * the client mod, as seamlessly. False if the portal's missing or leads nowhere.
+	 */
+	public static boolean sendThrough(MinecraftServer server, Entity entity, String name) {
+		CustomPortal portal = CustomPortals.get(name);
+		PortalLink link = portal == null ? null : CustomPortals.link(server, portal);
+		if (link == null) {
+			return false;
+		}
+		send(server, entity, portal, link, PortalGeometry.of(link), false);
+		return true;
 	}
 
 	private static AABB fillBox(CustomPortal portal) {

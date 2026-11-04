@@ -110,4 +110,23 @@ public interface SeamlessPortalsApi {
 
 	/** Stops asking {@code looks} (when its plugin's disabled, say). */
 	void removeBlockLooks(BlockLooks looks);
+
+	/**
+	 * Tells portal views a block changed at {@code location}: whoever's shown it through a portal
+	 * sees the change on the next tick. Otherwise a view finds changes as it rechecks what it's
+	 * sent, a little at a time (seconds later, the further it reaches): for a plugin changing a
+	 * block someone will be looking at through a portal (a door opened, say).
+	 */
+	void refresh(Location location);
+
+	/**
+	 * Sends {@code player} through the portal {@code name} from where they are, as if they'd
+	 * walked through it: where they come out is where they are mapped through it, and players
+	 * with the client mod see no loading screen if they're shown its far side. False if the
+	 * portal's missing or leads nowhere.
+	 */
+	boolean send(org.bukkit.entity.Player player, String name);
+
+	/** Whether {@code player} has the client mod: sees through portals, and goes through them seamlessly. */
+	boolean hasClientMod(org.bukkit.entity.Player player);
 }
