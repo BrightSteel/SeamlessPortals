@@ -13,7 +13,8 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * The SeamlessPortals resource pack, for players without the mod: what draws a
- * {@code starfield} portal's panel ({@link StarfieldPanels}). Black concrete with the
+ * {@code starfield} portal's panel ({@link StarfieldPanels}), and an {@code aether} portal's
+ * (the game's own nether portal swirl, tinted blue). Black concrete with the
  * panel's custom model data becomes a flat square whose texture is the game's own
  * {@code end_portal} texture (mapped into the block atlas, so nothing of Mojang's is in the
  * pack), and from 26.3 (pack format 97) the item shaders draw it as the end gateway does.
@@ -26,13 +27,14 @@ public final class StarfieldPack {
 			"assets/minecraft/items/black_concrete.json",
 			"assets/minecraft/atlases/blocks.json",
 			"assets/seamlessportals/models/item/starfield.json",
+			"assets/seamlessportals/models/item/aether.json",
 			"overlay_26_3/assets/minecraft/shaders/core/item.vsh",
 			"overlay_26_3/assets/minecraft/shaders/core/item.fsh");
 	private static final String OVERLAY = "overlay_26_3";
 	private static final String META = """
 			{
 			  "pack": {
-			    "description": "SeamlessPortals: starfield portals",
+			    "description": "SeamlessPortals: starfield and aether portals",
 			    "pack_format": 15,
 			    "min_format": 15,
 			    "max_format": 32767,

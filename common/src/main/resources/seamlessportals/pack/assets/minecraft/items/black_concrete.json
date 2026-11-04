@@ -8,7 +8,25 @@
         "model": {
           "type": "minecraft:model",
           "model": "seamlessportals:item/starfield",
-          "tints": [{"type": "minecraft:constant", "value": 16662782}]
+          "tints": [
+            {
+              "type": "minecraft:constant",
+              "value": 16662782
+            }
+          ]
+        }
+      },
+      {
+        "when": "seamlessportals:aether",
+        "model": {
+          "type": "minecraft:model",
+          "model": "seamlessportals:item/aether",
+          "tints": [
+            {
+              "type": "minecraft:constant",
+              "value": 5085695
+            }
+          ]
         }
       }
     ],

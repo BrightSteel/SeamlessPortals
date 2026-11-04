@@ -9,7 +9,7 @@ import dev.ryan.seamlessportals.net.PortalEnd;
  * {@code seamlessportals.see.<name>} and {@code seamlessportals.use.<name>} permissions (use grants see).
  * {@code panelDepth} is how far back from the opening (sixteenths) a starfield portal's panel
  * is drawn for players who don't see it live (see StarfieldPanels): behind something in the
- * opening, such as doors swinging open.
+ * opening, such as doors swinging open; or, negative, in front of it (over a floor it lies on).
  */
 public record CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access, int panelDepth) {
 	public CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access) {

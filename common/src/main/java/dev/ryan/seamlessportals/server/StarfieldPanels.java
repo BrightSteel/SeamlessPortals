@@ -33,8 +33,9 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * The starfield of {@link PortalFill#STARFIELD} portals, for players who don't see the portal
- * live: an item display exactly the size of the opening, standing in its plane. It's never a
+ * The starfield of {@link PortalFill#STARFIELD} portals (and the blue swirl of {@link
+ * PortalFill#AETHER} ones), for players who don't see the portal live: an item display exactly
+ * the size of the opening, standing in its plane. It's never a
  * real entity, only packets to those players (so it's never saved, and nobody else has it).
  *
  * <p>The item is black concrete marked with custom model data: the SeamlessPortals resource
@@ -46,8 +47,9 @@ public final class StarfieldPanels {
 	private static final int UPDATE_TICKS = 10;
 	/** Players this close (blocks) are sent a panel; further away it's taken back. */
 	private static final double RANGE = 96.0;
-	/** The custom model data string the pack's black concrete draws as a starfield. */
+	/** The custom model data strings the pack's black concrete draws as a starfield, and as the aether's swirl. */
 	static final String MODEL_DATA = "seamlessportals:starfield";
+	static final String AETHER_MODEL_DATA = "seamlessportals:aether";
 
 	/** By id: the class holding the entity types differs between the game versions this builds for. */
 	@SuppressWarnings("unchecked")
@@ -69,7 +71,7 @@ public final class StarfieldPanels {
 		}
 		Set<String> live = new HashSet<>();
 		for (CustomPortal portal : CustomPortals.all()) {
-			if (portal.end().fill() != PortalFill.STARFIELD) {
+			if (!portal.end().fill().panel()) {
 				continue;
 			}
 			ServerLevel level = CustomPortals.level(server, portal.world());
@@ -146,7 +148,8 @@ public final class StarfieldPanels {
 		Vec3 center = PortalGeometry.center(end).subtract(Vec3.atLowerCornerOf(end.facing().getUnitVec3i()).scale(depth / 16.0));
 		display.setPos(center.x, center.y, center.z);
 		ItemStack item = new ItemStack(BuiltInRegistries.ITEM.getValue(Identifier.withDefaultNamespace("black_concrete")));
-		item.set(DataComponents.CUSTOM_MODEL_DATA, new CustomModelData(List.of(), List.of(), List.of(MODEL_DATA), List.of()));
+		String model = end.fill() == PortalFill.AETHER ? AETHER_MODEL_DATA : MODEL_DATA;
+		item.set(DataComponents.CUSTOM_MODEL_DATA, new CustomModelData(List.of(), List.of(), List.of(model), List.of()));
 		display.setItemStack(item);
 		display.setItemTransform(ItemDisplayContext.NONE);
 		display.setBrightnessOverride(Brightness.FULL_BRIGHT);

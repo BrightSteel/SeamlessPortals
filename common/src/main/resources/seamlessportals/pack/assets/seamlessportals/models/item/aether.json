@@ -1,0 +1,43 @@
+{
+  "textures": {
+    "swirl": "minecraft:block/nether_portal",
+    "particle": "minecraft:block/nether_portal"
+  },
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        8
+      ],
+      "to": [
+        16,
+        16,
+        8
+      ],
+      "shade": false,
+      "faces": {
+        "south": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#swirl",
+          "tintindex": 0
+        },
+        "north": {
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "texture": "#swirl",
+          "tintindex": 0
+        }
+      }
+    }
+  ]
+}

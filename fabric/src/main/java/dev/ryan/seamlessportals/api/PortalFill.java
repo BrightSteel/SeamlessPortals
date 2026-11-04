@@ -19,5 +19,10 @@ public enum PortalFill {
 	 * exactly the size of the opening (insets included): a display entity, drawn by the
 	 * SeamlessPortals resource pack.
 	 */
-	STARFIELD
+	STARFIELD,
+	/**
+	 * An aether portal: no blocks, like {@link #STARFIELD}, and to players without the mod a blue
+	 * portal swirl (the nether portal's, tinted) in place of the starfield. Any way up.
+	 */
+	AETHER
 }

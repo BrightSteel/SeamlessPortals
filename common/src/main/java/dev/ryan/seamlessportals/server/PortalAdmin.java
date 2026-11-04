@@ -285,12 +285,13 @@ public final class PortalAdmin {
 
 	/**
 	 * How far back from the opening (sixteenths) a starfield portal's panel is drawn, for players
-	 * who don't see it live: behind something in the opening, such as doors swinging open.
+	 * who don't see it live: behind something in the opening, such as doors swinging open; or,
+	 * negative, in front of it, over a face its plane lies on (a floor's).
 	 */
 	public static String setPanelDepth(String name, int sixteenths) {
 		CustomPortal portal = existing(name);
-		if (sixteenths < 0 || sixteenths > 64) {
-			throw new IllegalArgumentException("The panel's depth is 0 to 64 sixteenths.");
+		if (sixteenths < -16 || sixteenths > 64) {
+			throw new IllegalArgumentException("The panel's depth is -16 to 64 sixteenths.");
 		}
 		CustomPortal after = portal.withPanelDepth(sixteenths);
 		change(portal, after);

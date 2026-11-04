@@ -109,6 +109,8 @@ public final class PortalViewRenderer {
 	 * its shaders draw only what's seen through the opening itself (see {@link #opening}).
 	 */
 	private static final double WINDOW_OVERLAP = 1.0 / 64.0;
+	/** An aether portal's swirl: the nether portal's, tinted this (as the SeamlessPortals pack tints its panel). */
+	private static final org.joml.Vector3f AETHER_TINT = new org.joml.Vector3f(0x4D / 255.0F, 0x99 / 255.0F, 0xFF / 255.0F);
 	/** The portal surface over a view sits this far in front of the window (blocks), clear of its depth. */
 	private static final double SWIRL_OFFSET = 0.01;
 	/** Vanilla's end portal textures: the backdrop and the star layers its shader scrolls. */
@@ -539,7 +541,7 @@ public final class PortalViewRenderer {
 			case WATER -> state.is(Blocks.WATER);
 			case LAVA -> state.is(Blocks.LAVA);
 			case NONE -> state.isAir();
-			case WINDOW, STARFIELD -> true; // no blocks of its own to lose
+			case WINDOW, STARFIELD, AETHER -> true; // no blocks of its own to lose
 		};
 	}
 
@@ -1023,7 +1025,9 @@ public final class PortalViewRenderer {
 			// portal you wait in rather than walk through.
 			Link link = pass.link();
 			double opacity = link.offline() ? config.offlinePortalOpacity : config.streamedPortalOpacity;
-			if (opacity <= 0.0 || link.link().source().fill() == PortalFill.NONE || link.link().source().fill().blockless()) {
+			PortalFill fill = link.link().source().fill();
+			// (an aether portal's blockless, but has its swirl as a nether portal has)
+			if (opacity <= 0.0 || fill == PortalFill.NONE || fill.blockless() && fill != PortalFill.AETHER) {
 				continue;
 			}
 			double depth = Math.abs(eye.subtract(link.geometry().sourceCenter()).dot(link.geometry().sourceNormal()));
@@ -1046,7 +1050,7 @@ public final class PortalViewRenderer {
 		Set<BlockPos> unhiddenEnds = new HashSet<>();
 		for (Link card : cards) {
 			switch (card.link().source().fill()) {
-				case NETHER_PORTAL, WATER, LAVA -> drawTexturedCard(card, 1.0F, PORTAL_PLANE_OFFSET);
+				case NETHER_PORTAL, WATER, LAVA, AETHER -> drawTexturedCard(card, 1.0F, PORTAL_PLANE_OFFSET);
 				case END_PORTAL, END_GATEWAY -> card.geometry().sourceBlocks().forEach(pos -> unhiddenEnds.add(pos.immutable()));
 				case NONE -> drawWindow(card, (RenderTarget) null, cardColor(card));
 				case WINDOW, STARFIELD -> {
@@ -1248,7 +1252,9 @@ public final class PortalViewRenderer {
 			v0 = sprite.getV0();
 			v1 = sprite.getV1();
 		}
-		if (fill == PortalFill.WATER && minecraft.level != null) {
+		if (fill == PortalFill.AETHER) {
+			tint.set(AETHER_TINT.x, AETHER_TINT.y, AETHER_TINT.z, alpha); // the nether portal's swirl, blue
+		} else if (fill == PortalFill.WATER && minecraft.level != null) {
 			int rgb = BiomeColors.getAverageWaterColor(minecraft.level, BlockPos.containing(link.geometry().sourceCenter()));
 			tint.set((rgb >> 16 & 0xFF) / 255.0F, (rgb >> 8 & 0xFF) / 255.0F, (rgb & 0xFF) / 255.0F, alpha);
 		}

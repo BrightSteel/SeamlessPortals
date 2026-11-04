@@ -34,7 +34,7 @@ public final class CustomPortalBlocks {
 			case END_GATEWAY -> Blocks.END_GATEWAY.defaultBlockState();
 			case WATER -> Blocks.WATER.defaultBlockState();
 			case LAVA -> Blocks.LAVA.defaultBlockState();
-			case NONE, WINDOW, STARFIELD -> Blocks.AIR.defaultBlockState();
+			case NONE, WINDOW, STARFIELD, AETHER -> Blocks.AIR.defaultBlockState();
 		};
 	}
 

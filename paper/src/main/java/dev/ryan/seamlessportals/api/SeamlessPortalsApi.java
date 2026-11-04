@@ -95,9 +95,10 @@ public interface SeamlessPortalsApi {
 	Portal setFrontOnly(String name, boolean frontOnly);
 
 	/**
-	 * How far back from its opening (sixteenths of a block, 0 to 64) a starfield portal's
+	 * How far back from its opening (sixteenths of a block, -16 to 64) a starfield portal's
 	 * starfield is drawn for players who don't see through it live (without the client mod):
-	 * behind something in the opening, such as doors swinging open, so it's seen in front.
+	 * behind something in the opening, such as doors swinging open, so it's seen in front; or,
+	 * negative, in front of the opening, over a face its plane lies on (a chest's floor, say).
 	 */
 	Portal setPanelDepth(String name, int sixteenths);
 
