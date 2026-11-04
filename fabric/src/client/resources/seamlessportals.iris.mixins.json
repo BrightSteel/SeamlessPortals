@@ -1,0 +1,16 @@
+{
+	"required": true,
+	"package": "dev.ryan.seamlessportals.client.mixin.iris",
+	"plugin": "dev.ryan.seamlessportals.client.iris.IrisMixinPlugin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"ClientLevelConnectionAccessor",
+		"IrisHandMixin",
+		"IrisKeepPipelinesMixin",
+		"IrisLevelChangeMixin",
+		"IrisReloadMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

@@ -643,6 +643,11 @@ public final class RemoteDimensions {
 		trackedLevel = null;
 	}
 
+	/** Rebuilds every view's terrain: the game's own was rebuilt for a new vertex format (shaders switched on or off). */
+	public static void rebuildViews() {
+		allViews().forEach(view -> view.renderer.allChanged());
+	}
+
 	private static List<RemoteDimension> allViews() {
 		List<RemoteDimension> all = new ArrayList<>();
 		VIEWS.values().forEach(all::addAll);

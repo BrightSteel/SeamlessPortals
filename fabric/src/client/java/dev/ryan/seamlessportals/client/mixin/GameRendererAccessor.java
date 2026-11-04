@@ -1,6 +1,8 @@
 package dev.ryan.seamlessportals.client.mixin;
 
+import net.minecraft.client.Camera;
 import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.fog.FogRenderer;
 import net.minecraft.client.renderer.GlobalSettingsUniform;
 import net.minecraft.client.renderer.Lightmap;
 import org.spongepowered.asm.mixin.Mixin;
@@ -20,6 +22,20 @@ public interface GameRendererAccessor {
 	@Mutable
 	@Accessor("lightmap")
 	void seamlessportals$setLightmap(Lightmap lightmap);
+
+	@Accessor("fogRenderer")
+	FogRenderer seamlessportals$getFogRenderer();
+
+	@Mutable
+	@Accessor("fogRenderer")
+	void seamlessportals$setFogRenderer(FogRenderer fog);
+
+	@Accessor("mainCamera")
+	Camera seamlessportals$getMainCamera();
+
+	@Mutable
+	@Accessor("mainCamera")
+	void seamlessportals$setMainCamera(Camera camera);
 
 	@Accessor("globalSettingsUniform")
 	GlobalSettingsUniform seamlessportals$getGlobalSettingsUniform();

@@ -100,6 +100,8 @@ final class DevDrive {
 				case "command" -> player.connection.sendCommand(String.join(" ", java.util.Arrays.copyOfRange(step, 1, step.length)));
 				case "textclick" -> textClick(minecraft, Double.parseDouble(step[1]), Double.parseDouble(step[2]));
 				case "press" -> press(minecraft, String.join(" ", java.util.Arrays.copyOfRange(step, 1, step.length)));
+				case "slot" -> slot(minecraft, player, Integer.parseInt(step[1]));
+				case "mouse" -> mouse(minecraft, Double.parseDouble(step[1]), Double.parseDouble(step[2]));
 				case "shot" -> {
 					// Between frames, as F2 takes one: the last frame whole, menus and all.
 					try {
@@ -136,6 +138,73 @@ final class DevDrive {
 		player.setXRot(Math.clamp(player.getXRot() + Float.parseFloat(current[5]), -90.0F, 90.0F));
 		if (--left <= 0) {
 			current = null;
+		}
+	}
+
+	/**
+	 * Left-clicks slot {@code slot} of the open container, as a click there would (the game mode's
+	 * click method and its click type differ between versions: found by their shape).
+	 */
+	private static void slot(Minecraft minecraft, LocalPlayer player, int slot) {
+		for (java.lang.reflect.Method method : minecraft.gameMode.getClass().getMethods()) {
+			Class<?>[] types = method.getParameterTypes();
+			if (types.length == 5 && types[0] == int.class && types[1] == int.class && types[2] == int.class && types[3].isEnum()) {
+				for (Object constant : types[3].getEnumConstants()) {
+					if (((Enum<?>) constant).name().equals("PICKUP")) {
+						try {
+							method.invoke(minecraft.gameMode, player.containerMenu.containerId, slot, 0, constant, player);
+						} catch (ReflectiveOperationException e) {
+							System.out.println("[devdrive] slot: " + e);
+						}
+						return;
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Moves the mouse to ({@code fx}, {@code fy}) of the window (fractions of its size), so what's
+	 * hovered (and its tooltip) is what's there (the window's handle's getter differs between
+	 * versions: found by its shape).
+	 */
+	private static void mouse(Minecraft minecraft, double fx, double fy) {
+		Object window = minecraft.getWindow();
+		try {
+			long handle = 0;
+			double width = 0;
+			double height = 0;
+			for (java.lang.reflect.Method method : window.getClass().getMethods()) {
+				if (method.getParameterCount() != 0) {
+					continue;
+				}
+				switch (method.getName()) {
+					case "handle", "getWindow" -> handle = method.getReturnType() == long.class ? (long) method.invoke(window) : handle;
+					case "getScreenWidth" -> width = ((Number) method.invoke(window)).doubleValue();
+					case "getScreenHeight" -> height = ((Number) method.invoke(window)).doubleValue();
+					default -> {
+					}
+				}
+			}
+			// the mouse handler's move callback, as the cursor's moving there would call it (its name
+			// differs between versions: found by its shape; in window coordinates)
+			for (java.lang.reflect.Method move : minecraft.mouseHandler.getClass().getDeclaredMethods()) {
+				Class<?>[] types = move.getParameterTypes();
+				if (move.getName().toLowerCase(java.util.Locale.ROOT).contains("move") && (types.length == 3 || types.length == 5) && types[0] == long.class
+						&& types[1] == double.class && types[2] == double.class) {
+					move.setAccessible(true);
+					// newer ones take how far it moved, too (only used while the mouse is grabbed)
+					if (types.length == 5) {
+						move.invoke(minecraft.mouseHandler, handle, fx * width, fy * height, 0.0, 0.0);
+					} else {
+						move.invoke(minecraft.mouseHandler, handle, fx * width, fy * height);
+					}
+					return;
+				}
+			}
+			System.out.println("[devdrive] mouse: no move callback");
+		} catch (ReflectiveOperationException e) {
+			System.out.println("[devdrive] mouse: " + e);
 		}
 	}
 

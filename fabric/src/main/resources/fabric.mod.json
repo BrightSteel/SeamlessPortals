@@ -17,6 +17,14 @@
 		{
 			"config": "seamlessportals.client.mixins.json",
 			"environment": "client"
+		},
+		{
+			"config": "seamlessportals.sodium.mixins.json",
+			"environment": "client"
+		},
+		{
+			"config": "seamlessportals.iris.mixins.json",
+			"environment": "client"
 		}
 	],
 	"depends": {

@@ -23,6 +23,8 @@ import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuSampler;
 import dev.ryan.seamlessportals.client.RemoteDimensions.Link;
 import dev.ryan.seamlessportals.client.mixin.GameRendererAccessor;
+import dev.ryan.seamlessportals.client.iris.IrisCompat;
+import dev.ryan.seamlessportals.client.sodium.SodiumCompat;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -776,7 +778,7 @@ public final class PortalViewRenderer {
 		cameraState.fogType = remote.camera.getFluidInCamera();
 		cameraState.fogData = remote.fog.setupFog(
 				remote.camera, Math.min(minecraft.options.getEffectiveRenderDistance(), ClientConfig.get().effectiveRemoteRenderDistance()), delta, ClientVersioned.bossOverlayWorldDarkening(partialTicks), remote.level);
-		remote.renderer.extract(delta, remote.camera, partialTicks);
+		SodiumCompat.remotePass(remote.renderer.renderer, projection, remote.fog, () -> remote.renderer.extract(delta, remote.camera, partialTicks));
 		if (lookingThrough != null) {
 			addRiddenVehicle(minecraft, remote, lookingThrough, partialTicks);
 		}
@@ -796,7 +798,9 @@ public final class PortalViewRenderer {
 			updateGlobals(gameRenderer, remoteEye);
 			RenderSystem.setProjectionMatrix(remote.projection.getBuffer(projection), ProjectionType.PERSPECTIVE);
 			remote.fog.updateBuffer(cameraState.fogData);
-			ClientVersioned.renderLevel(remote.renderer.renderer, remote.resourcePool, delta, remote.renderState, remote.fog.getBuffer(FogRenderer.FogMode.WORLD));
+			SodiumCompat.remotePass(remote.renderer.renderer, projection, remote.fog,
+					() -> IrisCompat.remoteDraw(remote.level, remote.camera,
+							() -> ClientVersioned.renderLevel(remote.renderer.renderer, remote.resourcePool, delta, remote.renderState, remote.fog.getBuffer(FogRenderer.FogMode.WORLD))));
 		} finally {
 			ClientVersioned.setMainRenderTarget(mainTarget);
 			gameRendererAccess.seamlessportals$setLightmap(savedLightmap);

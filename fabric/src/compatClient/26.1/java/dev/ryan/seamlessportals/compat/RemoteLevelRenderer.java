@@ -2,6 +2,7 @@ package dev.ryan.seamlessportals.compat;
 
 import dev.ryan.seamlessportals.client.mixin.LevelRendererAccessor;
 import dev.ryan.seamlessportals.client.mixin.RemoteCullAccessor;
+import dev.ryan.seamlessportals.client.sodium.SodiumCompat;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -24,6 +25,8 @@ import net.minecraft.world.level.dimension.DimensionType;
  */
 public final class RemoteLevelRenderer {
 	public final LevelRenderer renderer;
+	/** This renderer's Sodium chunk renderer, with Sodium installed. */
+	private final Object sodiumRenderer;
 
 	public RemoteLevelRenderer(Minecraft minecraft, LevelRenderState state, int width, int height) {
 		this.renderer = new LevelRenderer(
@@ -37,6 +40,7 @@ public final class RemoteLevelRenderer {
 		((LevelRendererAccessor) this.renderer).seamlessportals$setLevelRenderState(state);
 		// Created after resources loaded, so the sky and outline target are set up by hand.
 		this.renderer.onResourceManagerReload(minecraft.getResourceManager());
+		this.sodiumRenderer = SodiumCompat.registerRemote(this.renderer);
 	}
 
 	public CloudRenderer clouds() {
@@ -50,7 +54,7 @@ public final class RemoteLevelRenderer {
 	}
 
 	public void setLevel(ClientLevel level) {
-		this.renderer.setLevel(level);
+		SodiumCompat.asCurrent(this.renderer, () -> this.renderer.setLevel(level));
 	}
 
 	public void resize(int width, int height) {
@@ -58,7 +62,12 @@ public final class RemoteLevelRenderer {
 	}
 
 	public void setBlockDirty(BlockPos pos) {
-		this.renderer.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+		SodiumCompat.asCurrent(this.renderer, () -> this.renderer.setBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ()));
+	}
+
+	/** Rebuilds every section (as a video settings change does). */
+	public void allChanged() {
+		SodiumCompat.asCurrent(this.renderer, this.renderer::allChanged);
 	}
 
 	/** Re-cull on the next extract even if the camera hasn't turned. */
@@ -68,8 +77,10 @@ public final class RemoteLevelRenderer {
 
 	/** Culls, then fills the render state from {@code camera}, as GameRenderer's update and extract do. */
 	public void extract(DeltaTracker delta, Camera camera, float partialTicks) {
-		this.renderer.update(camera);
-		this.renderer.extractLevel(delta, camera, partialTicks);
+		SodiumCompat.asCurrent(this.renderer, () -> {
+			this.renderer.update(camera);
+			this.renderer.extractLevel(delta, camera, partialTicks);
+		});
 	}
 
 	/** A chunk's data and light are in: the culling graph may now look through it (26.1 is told; later versions see it). */
@@ -93,7 +104,7 @@ public final class RemoteLevelRenderer {
 
 	/** Whether {@code part} (the renderer or its section dispatcher, as mixins see them) is this one's. */
 	public boolean owns(Object part) {
-		return part == this.renderer || part != null && part == this.renderer.getSectionRenderDispatcher();
+		return part == this.renderer || part != null && (part == this.renderer.getSectionRenderDispatcher() || part == this.sodiumRenderer);
 	}
 
 	public void endFrame() {
@@ -101,7 +112,8 @@ public final class RemoteLevelRenderer {
 	}
 
 	public void close() {
-		this.renderer.setLevel(null);
+		SodiumCompat.asCurrent(this.renderer, () -> this.renderer.setLevel(null));
+		SodiumCompat.unregisterRemote(this.sodiumRenderer);
 		this.renderer.close();
 	}
 }

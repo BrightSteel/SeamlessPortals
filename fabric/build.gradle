@@ -96,6 +96,11 @@ repositories {
 		name = 'TerraformersMC'
 		url = 'https://maven.terraformersmc.com/releases/'
 	}
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
+		content { includeGroup 'maven.modrinth' }
+	}
 }
 
 dependencies {
@@ -105,6 +110,10 @@ dependencies {
 	// Optional: with Mod Menu installed, its list opens the client settings screen.
 	compileOnly("com.terraformersmc:modmenu:${mcProps.modmenu_version}") { transitive = false }
 	localRuntime("com.terraformersmc:modmenu:${mcProps.modmenu_version}") { transitive = false }
+	// Optional: with Sodium installed, remote views render through its chunk renderer (see SodiumCompat).
+	compileOnly("maven.modrinth:sodium:${mcProps.sodium_version}") { transitive = false }
+	// Optional: with an Iris shader pack on, remote views render through their own dimension's pipeline (see IrisCompat).
+	compileOnly("maven.modrinth:iris:${mcProps.iris_version}") { transitive = false }
 }
 
 processResources {

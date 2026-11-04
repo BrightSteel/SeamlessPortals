@@ -1,8 +1,6 @@
 package dev.ryan.seamlessportals.client.mixin;
 
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.ryan.seamlessportals.client.RemoteDimensions;
 import net.minecraft.client.Camera;
 import net.minecraft.client.particle.ParticleEngine;
@@ -21,13 +19,5 @@ public abstract class RemoteExtractMixin {
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/particle/ParticleEngine;extract(Lnet/minecraft/client/renderer/state/level/ParticlesRenderState;Lnet/minecraft/client/renderer/culling/Frustum;Lnet/minecraft/client/Camera;F)V"))
 	private boolean seamlessportals$skipParticlesForRemote(ParticleEngine engine, ParticlesRenderState state, Frustum frustum, Camera camera, float partialTicks) {
 		return !RemoteDimensions.isRemote(this);
-	}
-
-	/** No sliding of the culling frustum for remote views (see SectionOcclusionGraphMixin). */
-	@WrapOperation(
-			method = "cullTerrain",
-			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/LevelRenderer;offsetFrustum(Lnet/minecraft/client/renderer/culling/Frustum;)Lnet/minecraft/client/renderer/culling/Frustum;"))
-	private Frustum seamlessportals$noSlideForRemoteViews(Frustum frustum, Operation<Frustum> original) {
-		return RemoteDimensions.isRemote(this) ? new Frustum(frustum) : original.call(frustum);
 	}
 }

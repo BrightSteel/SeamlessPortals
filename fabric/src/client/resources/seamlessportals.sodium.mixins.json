@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"package": "dev.ryan.seamlessportals.client.mixin.sodium",
+	"plugin": "dev.ryan.seamlessportals.client.sodium.SodiumMixinPlugin",
+	"compatibilityLevel": "JAVA_25",
+	"client": [
+		"LevelSliceAccessor",
+		"SodiumMeshingMixin",
+		"SodiumRemoteViewMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

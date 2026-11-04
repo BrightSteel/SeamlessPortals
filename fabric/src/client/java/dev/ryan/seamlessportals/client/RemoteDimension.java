@@ -20,6 +20,7 @@ import dev.ryan.seamlessportals.compat.RemoteLevelRenderer;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import dev.ryan.seamlessportals.client.mixin.CloudRendererInvoker;
 import dev.ryan.seamlessportals.client.mixin.LevelRendererAccessor;
+import dev.ryan.seamlessportals.client.sodium.SodiumCompat;
 import io.netty.buffer.Unpooled;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -315,6 +316,7 @@ public final class RemoteDimension implements AutoCloseable {
 		int x = ClientVersioned.chunkX(packet);
 		int z = ClientVersioned.chunkZ(packet);
 		this.lit.remove(new ChunkPos(x, z));
+		SodiumCompat.chunkUnlit(this.level, x, z);
 		ClientVersioned.replaceWithPacketData(this.level.getChunkSource(), x, z, ClientVersioned.chunkData(packet));
 		ClientboundLightUpdatePacketData lightData = ClientVersioned.lightData(packet);
 		Runnable light = () -> {
@@ -322,6 +324,7 @@ public final class RemoteDimension implements AutoCloseable {
 			LevelChunk chunk = this.level.getChunkSource().getChunk(x, z, false);
 			if (chunk != null) {
 				this.enableChunkLight(chunk, x, z);
+				SodiumCompat.chunkLit(this.level, x, z);
 				this.renderer.chunkReady(chunk.getPos());
 				this.lit.add(new ChunkPos(x, z));
 				RemoteDimensions.chunkLit(this, x, z);

@@ -1,6 +1,7 @@
 {
 	"required": true,
 	"package": "dev.ryan.seamlessportals.client.mixin",
+	"plugin": "dev.ryan.seamlessportals.client.sodium.ClientMixinPlugin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"AbstractEndPortalRendererMixin",
@@ -18,12 +19,14 @@
 		"HiddenPortalOutlineMixin",
 		"LevelRendererAccessor",
 		"LivingEntityAccessor",
+		"MinecraftAccessor",
 		"PlayerAccessor",
 		"LocalPlayerMixin",
 		"MainRenderTargetAccessor",
 		"PortalParticlesMixin",
 		"RemoteCullAccessor",
 		"RemoteExtractMixin",
+		"RemoteCullTerrainMixin",
 		"RemoteRenderDistanceMixin",
 		"RenderSectionRegionAccessor",
 		"SectionCompilerMixin",
