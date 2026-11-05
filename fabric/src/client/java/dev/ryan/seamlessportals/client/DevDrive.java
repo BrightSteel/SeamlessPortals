@@ -29,6 +29,10 @@ import java.util.List;
  *   <li>{@code command <command>}: runs the command (no slash) as the player;</li>
  *   <li>{@code textclick <x> <y>}: clicks the text there (a dialog's, say) straight through its widget;</li>
  *   <li>{@code press <label>}: presses the button with that label on the screen showing;</li>
+ *   <li>{@code view <first|back|front>}: the camera's perspective, as F5 cycles it;</li>
+ *   <li>{@code hud <on|off>}: shows or hides the HUD, as F1 does;</li>
+ *   <li>{@code gamma <0-1>}: the brightness option (moody to bright);</li>
+ *   <li>{@code size <width> <height>}: resizes the window (and so the shots);</li>
  *   <li>{@code shot <name>}: saves the last frame whole, menus and all, as {@code drive_<name>.png};</li>
  *   <li>{@code done <name>}: writes {@code drive_<name>.done} when it's reached.</li>
  * </ul>
@@ -102,6 +106,14 @@ final class DevDrive {
 				case "press" -> press(minecraft, String.join(" ", java.util.Arrays.copyOfRange(step, 1, step.length)));
 				case "slot" -> slot(minecraft, player, Integer.parseInt(step[1]));
 				case "mouse" -> mouse(minecraft, Double.parseDouble(step[1]), Double.parseDouble(step[2]));
+				case "view" -> minecraft.options.setCameraType(switch (step[1]) {
+					case "back" -> net.minecraft.client.CameraType.THIRD_PERSON_BACK;
+					case "front" -> net.minecraft.client.CameraType.THIRD_PERSON_FRONT;
+					default -> net.minecraft.client.CameraType.FIRST_PERSON;
+				});
+				case "hud" -> hud(minecraft, step[1].equals("on"));
+				case "gamma" -> minecraft.options.gamma().set(Double.parseDouble(step[1]));
+				case "size" -> size(minecraft, Integer.parseInt(step[1]), Integer.parseInt(step[2]));
 				case "shot" -> {
 					// Between frames, as F2 takes one: the last frame whole, menus and all.
 					try {
@@ -161,6 +173,49 @@ final class DevDrive {
 				}
 			}
 		}
+	}
+
+	/** Shows or hides the HUD, as F1 does (an option before 26.3, the HUD's own since). */
+	private static void hud(Minecraft minecraft, boolean shown) {
+		try {
+			minecraft.options.getClass().getField("hideGui").setBoolean(minecraft.options, !shown);
+			return;
+		} catch (ReflectiveOperationException ignored) {
+		}
+		try {
+			Object hud = minecraft.gui.getClass().getField("hud").get(minecraft.gui);
+			if ((boolean) hud.getClass().getMethod("isHidden").invoke(hud) == shown) {
+				hud.getClass().getMethod("toggle").invoke(hud);
+			}
+		} catch (ReflectiveOperationException ignored) {
+		}
+	}
+
+	/** Resizes the window (by SDL from 26.3, GLFW before it). */
+	private static void size(Minecraft minecraft, int width, int height) {
+		long handle = handle(minecraft);
+		for (String[] call : new String[][] {{"org.lwjgl.sdl.SDLVideo", "SDL_SetWindowSize"}, {"org.lwjgl.glfw.GLFW", "glfwSetWindowSize"}}) {
+			try {
+				Class.forName(call[0]).getMethod(call[1], long.class, int.class, int.class).invoke(null, handle, width, height);
+				return;
+			} catch (ReflectiveOperationException | LinkageError ignored) {
+			}
+		}
+	}
+
+	/** The game window's handle, GLFW's or SDL's (its getter's name differs between versions). */
+	private static long handle(Minecraft minecraft) {
+		Object window = minecraft.getWindow();
+		try {
+			for (java.lang.reflect.Method method : window.getClass().getMethods()) {
+				if (method.getParameterCount() == 0 && method.getReturnType() == long.class
+						&& (method.getName().equals("handle") || method.getName().equals("getWindow"))) {
+					return (long) method.invoke(window);
+				}
+			}
+		} catch (ReflectiveOperationException ignored) {
+		}
+		return 0;
 	}
 
 	/**
