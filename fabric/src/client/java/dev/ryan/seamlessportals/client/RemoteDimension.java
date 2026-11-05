@@ -96,6 +96,15 @@ public final class RemoteDimension implements AutoCloseable {
 	private static final int SEED_NOW_CHUNKS = 9;
 	TextureTarget target;
 	private ChunkPos center;
+	/**
+	 * Chunks that came before the view had a center: the server sends a far side's chunks ahead
+	 * of the links that say where it is, so a brand-new view (on joining, say) gets them before
+	 * anything centers it, and its chunk cache, still around 0, 0, would turn most of them away
+	 * for good (the server never sends a chunk twice). Kept here, and loaded once it's centered.
+	 */
+	private final ArrayDeque<ClientboundLevelChunkWithLightPacket> early = new ArrayDeque<>();
+	/** At most a whole view's worth of early chunks are kept (the newest). */
+	private static final int MAX_EARLY_CHUNKS = (2 * CHUNK_RADIUS + 1) * (2 * CHUNK_RADIUS + 1);
 	private boolean probePrimed;
 	private boolean closed;
 
@@ -147,6 +156,9 @@ public final class RemoteDimension implements AutoCloseable {
 	void centerOn(ChunkPos chunk) {
 		this.center = chunk;
 		this.level.getChunkSource().updateViewCenter(chunk.x(), chunk.z());
+		while (!this.early.isEmpty()) {
+			this.acceptChunk(this.early.poll(), false);
+		}
 	}
 
 	ChunkPos center() {
@@ -313,6 +325,13 @@ public final class RemoteDimension implements AutoCloseable {
 	 * a few dozen chunks a tick as vanilla does; {@code now} applies it at once instead.
 	 */
 	void acceptChunk(ClientboundLevelChunkWithLightPacket packet, boolean now) {
+		if (this.center == null) {
+			if (this.early.size() >= MAX_EARLY_CHUNKS) {
+				this.early.poll();
+			}
+			this.early.add(packet);
+			return;
+		}
 		int x = ClientVersioned.chunkX(packet);
 		int z = ClientVersioned.chunkZ(packet);
 		this.lit.remove(new ChunkPos(x, z));
