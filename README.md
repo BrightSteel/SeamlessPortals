@@ -161,3 +161,7 @@ hand: permissions are now `seamlessportals.*` (were `netherview.*`), and the com
 
 builds the mod and the plugin for every version in `versions/` into `build/dist`. For a single
 version: `./gradlew build -Pmc=26.3`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
