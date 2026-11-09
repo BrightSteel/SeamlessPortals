@@ -95,6 +95,13 @@ public interface SeamlessPortalsApi {
 	Portal setFrontOnly(String name, boolean frontOnly);
 
 	/**
+	 * Makes the portal two-faced: gone into from behind it leads where it does from the front,
+	 * out of the far side's front (a doorway standing free, with nothing behind it), and it's
+	 * seen through the same way from both sides. Each face then works only from its own side.
+	 */
+	Portal setTwoFaced(String name, boolean twoFaced);
+
+	/**
 	 * How far back from its opening (sixteenths of a block, -16 to 64) a starfield portal's
 	 * starfield is drawn for players who don't see through it live (without the client mod):
 	 * behind something in the opening, such as doors swinging open, so it's seen in front; or,

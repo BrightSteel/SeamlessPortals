@@ -211,7 +211,10 @@ public final class PortalViewServer {
 			if (!sender.canReceive(player)) {
 				continue; // without the client mod: nothing to stream, and vanilla travel
 			}
-			boolean synced = scan && update(server, player, now);
+			// (just arrived, at once: until its portals are known, walking back through one goes unseen)
+			PlayerState state = PLAYERS.get(player.getUUID());
+			boolean arrived = state != null && player.level().dimension() != state.streamedFrom;
+			boolean synced = (scan || arrived) && update(server, player, now);
 			if (travelThroughPortal(server, player)) {
 				continue;
 			}
@@ -457,9 +460,8 @@ public final class PortalViewServer {
 		findNetherLinks(server, level, center, now, links);
 		findEndLinks(server, player, level, center, now, links);
 		for (CustomPortal portal : CustomPortals.near(level, player.position(), config.scanRadius())) {
-			PortalLink link = CustomPortals.canSee(player, portal) ? CustomPortals.link(server, portal) : null;
-			if (link != null && portal.end().width() <= config.maxPortalSize() && portal.end().height() <= config.maxPortalSize()) {
-				links.add(link);
+			if (CustomPortals.canSee(player, portal) && portal.end().width() <= config.maxPortalSize() && portal.end().height() <= config.maxPortalSize()) {
+				links.addAll(CustomPortals.links(server, portal));
 			}
 		}
 		links.sort(Comparator.comparingDouble(link ->

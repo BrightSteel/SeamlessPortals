@@ -229,6 +229,22 @@ public final class CustomPortals {
 		}
 	}
 
+	/**
+	 * The links a portal stands for: its {@link #link}, or none; a two-faced portal's (see
+	 * CustomPortal#twoFaced) for each face, each going through only from its own side.
+	 */
+	public static List<PortalLink> links(MinecraftServer server, CustomPortal portal) {
+		PortalLink link = link(server, portal);
+		if (link == null) {
+			return List.of();
+		}
+		if (!portal.twoFaced()) {
+			return List.of(link);
+		}
+		return List.of(new PortalLink(link.source().withFrontOnly(true), link.destDimension(), link.destDimensionType(), link.dest()),
+				new PortalLink(link.source().reversed(), link.destDimension(), link.destDimensionType(), link.dest()));
+	}
+
 	private static PortalLink targetLink(MinecraftServer server, CustomPortal portal, String world, double x, double y, double z, float yaw) {
 		ServerLevel dest = level(server, world);
 		if (dest == null) {

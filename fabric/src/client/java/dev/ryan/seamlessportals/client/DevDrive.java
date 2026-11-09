@@ -23,7 +23,8 @@ import java.util.List;
  *   <li>{@code step <ticks> <forward> <strafe> <yaw per tick> <pitch per tick>}: hold the
  *       movement keys (forward and strafe -1, 0 or 1) and turn, for that many ticks;</li>
  *   <li>{@code record <name> [every]} / {@code stop}: save each tick's frame (with
- *       {@code every}, every frame) as {@code drive_<name>_<n>.png}, or stop;</li>
+ *       {@code every}, every frame) as {@code drive_<name>_<n>.png}, each noted in
+ *       {@code drive_<name>.txt}, or stop;</li>
  *   <li>{@code respawn}: respawns, if dead;</li>
  *   <li>{@code use}: right-clicks (as the use key, if it's the default one);</li>
  *   <li>{@code command <command>}: runs the command (no slash) as the player;</li>
@@ -32,6 +33,8 @@ import java.util.List;
  *   <li>{@code view <first|back|front>}: the camera's perspective, as F5 cycles it;</li>
  *   <li>{@code hud <on|off>}: shows or hides the HUD, as F1 does;</li>
  *   <li>{@code gamma <0-1>}: the brightness option (moody to bright);</li>
+ *   <li>{@code reload}: reloads the resource packs (as F3+T);</li>
+ *   <li>{@code server <command>}: runs the command on the singleplayer server, as an operator;</li>
  *   <li>{@code size <width> <height>}: resizes the window (and so the shots);</li>
  *   <li>{@code shot <name>}: saves the last frame whole, menus and all, as {@code drive_<name>.png};</li>
  *   <li>{@code done <name>}: writes {@code drive_<name>.done} when it's reached.</li>
@@ -112,6 +115,12 @@ final class DevDrive {
 					default -> net.minecraft.client.CameraType.FIRST_PERSON;
 				});
 				case "hud" -> hud(minecraft, step[1].equals("on"));
+				case "reload" -> minecraft.reloadResourcePacks();
+				case "server" -> {
+					String command = String.join(" ", java.util.Arrays.copyOfRange(step, 1, step.length));
+					var server = minecraft.getSingleplayerServer();
+					server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), command));
+				}
 				case "gamma" -> minecraft.options.gamma().set(Double.parseDouble(step[1]));
 				case "size" -> size(minecraft, Integer.parseInt(step[1]), Integer.parseInt(step[2]));
 				case "shot" -> {
@@ -343,6 +352,19 @@ final class DevDrive {
 		minecraft.options.keyRight.setDown(strafe < 0);
 	}
 
+	/** What each frame saved was of, in {@code drive_<name>.txt}: its number, the dimension, the camera, and the portals' state. */
+	private static void note(Minecraft minecraft) {
+		var camera = ClientVersioned.mainCamera().position();
+		var link = PortalViewRenderer.crossedLink();
+		String line = frame + " " + minecraft.level.dimension().identifier() + " " + String.format("%.3f %.3f %.3f", camera.x, camera.y, camera.z)
+				+ " tick=" + minecraft.player.tickCount + " links=" + RemoteDimensions.links().size() + " crossed=" + (link == null ? "-" : link.dest().identifier())
+				+ " touching=" + PortalHiding.touchesLinkedPortal(minecraft.player) + System.lineSeparator();
+		try {
+			Files.writeString(minecraft.gameDirectory.toPath().resolve("drive_" + recording + ".txt"), line, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+		} catch (IOException ignored) {
+		}
+	}
+
 	/** After the frame's level and portals are drawn: saves it if recording (once a tick). */
 	static void frame(Minecraft minecraft) {
 		if (recording == null || !frameDue && !everyFrame) {
@@ -350,6 +372,7 @@ final class DevDrive {
 		}
 		frameDue = false;
 		RenderTarget target = ClientVersioned.mainRenderTarget();
+		note(minecraft);
 		try {
 			Screenshot.grab(minecraft.gameDirectory, "drive_" + recording + "_" + String.format("%03d", frame++) + ".png", target, 2, message -> {
 			});

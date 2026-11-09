@@ -122,7 +122,12 @@ public final class PortalViewRenderer {
 	private static final double STREAMED_SURFACE_FADE = 1.0;
 	/** Within this distance of the plane (blocks), an eye inside the opening sees the surface over the whole screen. */
 	private static final double INSIDE_PORTAL_DEPTH = 0.4;
-	/** Keeps the oblique near plane from passing through the remote camera when standing in a portal. */
+	/**
+	 * How near the plane (blocks) the remote camera can be and still be clipped to it: any nearer
+	 * and an oblique near plane passes through the camera. Pushed back to here instead, it cut
+	 * a strip off whatever the plane meets (a seam down the frame, seen through to what's behind
+	 * it). There's no need: nothing's between the eye and a plane that near but a sliver.
+	 */
 	private static final double MIN_CLIP_DISTANCE = 0.05;
 
 	// ClientVersioned.pipeline(location, vertex shader, fragment shader, transforms, vertex format,
@@ -291,7 +296,10 @@ public final class PortalViewRenderer {
 				// far as the eye goes, the crossing isn't over. Draw it as crossed the other
 				// way (the world left, the new one in the opening) until the camera is out.
 				for (Link link : RemoteDimensions.links()) {
-					if (link.geometry().sourceCenter().distanceToSqr(arrivalCenter) < 0.01 && RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
+					// (of a two-faced portal's, each going only from its side, the face come out of)
+					if (link.geometry().sourceCenter().distanceToSqr(arrivalCenter) < 0.01
+							&& (!link.link().source().frontOnly() || link.geometry().sourceNormal().dot(arrivalOutward) > 0)
+							&& RemoteDimensions.viewFor(link.link(), link.dest()) != null) {
 						crossedLink = link;
 						crossedAt = Util.getMillis();
 						return;
@@ -385,7 +393,10 @@ public final class PortalViewRenderer {
 		Vec3 eye = main.position();
 		List<Link> visible = new ArrayList<>();
 		for (Link link : RemoteDimensions.links()) {
-			if (frustum.isVisible(link.geometry().sourceBox().inflate(0.25))
+			// One going through only from its front shows nothing from behind (a two-faced
+			// portal's other face shows its far side there).
+			boolean fromBehind = link.link().source().frontOnly() && eye.subtract(link.geometry().sourceCenter()).dot(link.geometry().sourceNormal()) < 0;
+			if (!fromBehind && frustum.isVisible(link.geometry().sourceBox().inflate(0.25))
 					&& isFill(minecraft.level.getBlockState(link.link().min()), link.link().source().fill())) {
 				visible.add(link);
 			}
@@ -707,7 +718,8 @@ public final class PortalViewRenderer {
 		// Place once to get the view rotation for the clip plane, then again with the culling
 		// frustum narrowed to the portal (the rotation is unchanged, so the plane still holds).
 		remote.camera.place(main, remote.level, remoteEye, orientation);
-		Matrix4f projection = obliqueProjection(levelProjection, clipPlane(geometry, remote.camera, remoteEye, projectionCenter));
+		Vector4f clip = clipPlane(geometry, remote.camera, remoteEye, projectionCenter);
+		Matrix4f projection = clip == null ? new Matrix4f(levelProjection) : obliqueProjection(levelProjection, clip);
 		remote.camera.place(main, remote.level, remoteEye, orientation, narrowedToRect(levelProjection, rect));
 		remote.renderer.forceRecull();
 		lookingThrough = geometry;
@@ -850,7 +862,8 @@ public final class PortalViewRenderer {
 
 	/**
 	 * The destination portal plane in the remote camera's view space, as (n, d) with
-	 * n·v + d ≥ 0 on the side that should stay visible (the side away from the camera).
+	 * n·v + d ≥ 0 on the side that should stay visible (the side away from the camera); or null
+	 * for none, with the eye as rendered too near the plane for one (see {@link #MIN_CLIP_DISTANCE}).
 	 */
 	private static Vector4f clipPlane(PortalGeometry geometry, Camera remoteCamera, Vec3 remoteEye, Vector3f center) {
 		Vec3 normal = geometry.destNormal();
@@ -861,7 +874,10 @@ public final class PortalViewRenderer {
 		// The plane must stay ahead of where the projection converges, which view bobbing
 		// moves off the camera: an oblique near plane behind that point clips the wrong side.
 		double atCenter = viewNormal.x * center.x + viewNormal.y * center.y + viewNormal.z * center.z;
-		double distance = Math.min(keep.dot(remoteEye.subtract(planePoint)), -MIN_CLIP_DISTANCE - atCenter);
+		double distance = keep.dot(remoteEye.subtract(planePoint));
+		if (distance > -MIN_CLIP_DISTANCE - atCenter) {
+			return null;
+		}
 		return new Vector4f(viewNormal.x, viewNormal.y, viewNormal.z, (float) distance);
 	}
 
@@ -1098,22 +1114,25 @@ public final class PortalViewRenderer {
 	/**
 	 * The opening, for the window's shaders to draw only what's seen through it (the box they're
 	 * drawn on covers more of the screen, from close up and askew): its middle relative to
-	 * {@code eye}, its right and up axes over its half width and height, and its plane's normal,
-	 * as the matrix's columns.
+	 * the eye as rendered ({@link #visualEye}, whose lines of sight the picture's made of:
+	 * right at the plane it can be on the other side of it from the camera), its right and up
+	 * axes over its half width and height, and its plane's normal, as the matrix's columns;
+	 * and in their last row, where that eye is from the camera {@code eye}.
 	 */
 	private static Matrix4f opening(Link link, Vec3 eye) {
 		PortalGeometry geometry = link.geometry();
-		Vec3 middle = geometry.sourceCenter().subtract(eye);
-		Vec3[] corners = geometry.sourceCorners(eye, 0.0);
+		Vec3 middle = geometry.sourceCenter().subtract(visualEye);
+		Vec3 offset = visualEye.subtract(eye);
+		Vec3[] corners = geometry.sourceCorners(visualEye, 0.0);
 		Vec3 right = corners[1].subtract(corners[0]);
 		Vec3 up = corners[3].subtract(corners[0]);
 		Vec3 normal = geometry.sourceNormal();
 		right = right.scale(2.0 / right.lengthSqr());
 		up = up.scale(2.0 / up.lengthSqr());
 		return new Matrix4f(
-				(float) middle.x, (float) middle.y, (float) middle.z, 0.0F,
-				(float) right.x, (float) right.y, (float) right.z, 0.0F,
-				(float) up.x, (float) up.y, (float) up.z, 0.0F,
+				(float) middle.x, (float) middle.y, (float) middle.z, (float) offset.x,
+				(float) right.x, (float) right.y, (float) right.z, (float) offset.y,
+				(float) up.x, (float) up.y, (float) up.z, (float) offset.z,
 				(float) normal.x, (float) normal.y, (float) normal.z, 0.0F);
 	}
 

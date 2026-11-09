@@ -107,6 +107,11 @@ final class PaperPortalApi implements SeamlessPortalsApi {
 	}
 
 	@Override
+	public Portal setTwoFaced(String name, boolean twoFaced) {
+		return this.change(name, () -> PortalAdmin.setTwoFaced(name, twoFaced));
+	}
+
+	@Override
 	public Portal setPanelDepth(String name, int sixteenths) {
 		return this.change(name, () -> PortalAdmin.setPanelDepth(name, sixteenths));
 	}

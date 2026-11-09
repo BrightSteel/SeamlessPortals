@@ -10,10 +10,12 @@ import dev.ryan.seamlessportals.net.PortalEnd;
  * {@code panelDepth} is how far back from the opening (sixteenths) a starfield portal's panel
  * is drawn for players who don't see it live (see StarfieldPanels): behind something in the
  * opening, such as doors swinging open; or, negative, in front of it (over a floor it lies on).
+ * {@code twoFaced}: gone into from behind, it leads where it does from the front, out of the far
+ * side's front (a doorway standing free, with nothing behind it): each face only from its side.
  */
-public record CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access, int panelDepth) {
+public record CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access, int panelDepth, boolean twoFaced) {
 	public CustomPortal(String name, String world, PortalEnd end, Destination destination, Access access) {
-		this(name, world, end, destination, access, 0);
+		this(name, world, end, destination, access, 0, false);
 	}
 
 	/** What everyone may do with a portal, before permissions. */
@@ -45,19 +47,23 @@ public record CustomPortal(String name, String world, PortalEnd end, Destination
 	}
 
 	public CustomPortal withDestination(Destination destination) {
-		return new CustomPortal(this.name, this.world, this.end, destination, this.access, this.panelDepth);
+		return new CustomPortal(this.name, this.world, this.end, destination, this.access, this.panelDepth, this.twoFaced);
 	}
 
 	public CustomPortal withEnd(PortalEnd end) {
-		return new CustomPortal(this.name, this.world, end, this.destination, this.access, this.panelDepth);
+		return new CustomPortal(this.name, this.world, end, this.destination, this.access, this.panelDepth, this.twoFaced);
 	}
 
 	public CustomPortal withAccess(Access access) {
-		return new CustomPortal(this.name, this.world, this.end, this.destination, access, this.panelDepth);
+		return new CustomPortal(this.name, this.world, this.end, this.destination, access, this.panelDepth, this.twoFaced);
 	}
 
 	public CustomPortal withPanelDepth(int panelDepth) {
-		return new CustomPortal(this.name, this.world, this.end, this.destination, this.access, panelDepth);
+		return new CustomPortal(this.name, this.world, this.end, this.destination, this.access, panelDepth, this.twoFaced);
+	}
+
+	public CustomPortal withTwoFaced(boolean twoFaced) {
+		return new CustomPortal(this.name, this.world, this.end, this.destination, this.access, this.panelDepth, twoFaced);
 	}
 
 	/** Where a custom portal leads. */

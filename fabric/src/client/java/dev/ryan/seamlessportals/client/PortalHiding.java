@@ -63,6 +63,11 @@ public final class PortalHiding {
 		return false;
 	}
 
+	/** Whether the block at {@code pos} in the player's level belongs to a portal with a live view. */
+	public static boolean isLinkedPortal(BlockPos pos) {
+		return hiddenInPlayerLevel.contains(pos);
+	}
+
 	/** Every portal block hidden anywhere, for a view whose hiding rules just changed (see RemoteDimensions#retireBridge). */
 	static Set<BlockPos> allHidden() {
 		Set<BlockPos> all = new HashSet<>(hiddenInRemoteLevels);

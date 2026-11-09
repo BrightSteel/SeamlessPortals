@@ -75,6 +75,15 @@ public record PortalEnd(BlockPos min, Direction facing, Direction up, int width,
 		return new PortalEnd(this.min, this.facing, this.up, this.width, this.height, this.surface, this.fill, this.insets, frontOnly);
 	}
 
+	/**
+	 * The same opening seen from behind: facing the other way (so its right's the other way
+	 * too, and its left and right insets swap), only going through from that side.
+	 */
+	public PortalEnd reversed() {
+		PortalInsets turned = new PortalInsets(this.insets.right(), this.insets.left(), this.insets.bottom(), this.insets.top());
+		return new PortalEnd(this.min, this.facing.getOpposite(), this.up, this.width, this.height, this.surface, this.fill, turned, true);
+	}
+
 	/** This end with its plane at {@code surface} sixteenths. */
 	public PortalEnd withSurface(int surface) {
 		return new PortalEnd(this.min, this.facing, this.up, this.width, this.height, surface, this.fill, this.insets, this.frontOnly);

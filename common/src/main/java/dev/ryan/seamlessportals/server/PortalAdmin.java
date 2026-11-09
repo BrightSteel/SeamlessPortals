@@ -161,7 +161,7 @@ public final class PortalAdmin {
 		CustomPortal portal = existing(name);
 		Direction realUp = up != null ? up : facing.getAxis() == Direction.Axis.Y ? Direction.SOUTH : Direction.UP;
 		PortalEnd end = opening(level, BlockPos.min(a, b), BlockPos.max(a, b), facing, realUp, portal.end().fill(), portal);
-		CustomPortal moved = new CustomPortal(portal.name(), level.dimension().identifier().toString(), end, portal.destination(), portal.access(), portal.panelDepth());
+		CustomPortal moved = new CustomPortal(portal.name(), level.dimension().identifier().toString(), end, portal.destination(), portal.access(), portal.panelDepth(), portal.twoFaced());
 		change(portal, moved);
 		ServerLevel from = CustomPortals.level(server, portal.world());
 		if (from != null) {
@@ -284,6 +284,18 @@ public final class PortalAdmin {
 	}
 
 	/**
+	 * Whether the portal's two-faced (see CustomPortal#twoFaced): gone into from behind, it leads
+	 * where it does from the front.
+	 */
+	public static String setTwoFaced(String name, boolean twoFaced) {
+		CustomPortal portal = existing(name);
+		CustomPortal after = portal.withTwoFaced(twoFaced);
+		change(portal, after);
+		CustomPortals.put(after);
+		return "'" + portal.name() + "' now " + (twoFaced ? "leads to the same place from behind." : "has a back.");
+	}
+
+	/**
 	 * How far back from the opening (sixteenths) a starfield portal's panel is drawn, for players
 	 * who don't see it live: behind something in the opening, such as doors swinging open; or,
 	 * negative, in front of it, over a face its plane lies on (a floor's).
@@ -331,7 +343,7 @@ public final class PortalAdmin {
 		PortalEnd end = portal.end();
 		return " world " + portal.world() + ", corner " + end.min().toShortString()
 				+ "\n " + end.width() + "×" + end.height() + ", facing " + end.facing().getSerializedName() + ", up " + end.up().getSerializedName()
-				+ (end.insets().isNone() ? "" : ", inset " + describe(end.insets())) + (end.frontOnly() ? ", front only" : "")
+				+ (end.insets().isNone() ? "" : ", inset " + describe(end.insets())) + (end.frontOnly() ? ", front only" : "") + (portal.twoFaced() ? ", two-faced" : "")
 				+ "\n fill " + end.fill().name().toLowerCase(Locale.ROOT) + ", " + describe(portal.access(), portal.name())
 				+ "\n leads to " + describe(portal.destination()) + nextSpot(portal);
 	}

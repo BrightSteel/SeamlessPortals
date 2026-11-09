@@ -123,6 +123,15 @@ public final class SeamlessPortalsApi {
 		return change(name, () -> PortalAdmin.setFrontOnly(name, frontOnly));
 	}
 
+	/**
+	 * Makes the portal two-faced: gone into from behind it leads where it does from the front,
+	 * out of the far side's front (a doorway standing free, with nothing behind it), and it's
+	 * seen through the same way from both sides. Each face then works only from its own side.
+	 */
+	public static Portal setTwoFaced(String name, boolean twoFaced) {
+		return change(name, () -> PortalAdmin.setTwoFaced(name, twoFaced));
+	}
+
 	/** The API's view of the server half's portal record. */
 	public static Portal toApi(CustomPortal portal) {
 		PortalEnd end = portal.end();

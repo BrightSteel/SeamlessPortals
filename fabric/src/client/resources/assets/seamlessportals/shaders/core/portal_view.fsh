@@ -14,7 +14,7 @@ layout(location = 0) out vec4 fragColor;
 // The window is a box behind the opening (so it still covers it with the camera right at the
 // plane), and from close up and askew the box covers more of the screen than the opening does:
 // only what's seen through the opening itself is the far side. TextureMat holds the opening:
-// its middle (camera-relative), its right and up axes over its half width and height, and the
+// its middle (from the eye as rendered), its right and up axes over its half width and height, and the
 // plane's normal.
 bool throughOpening(vec3 sight) {
     vec3 middle = TextureMat[0].xyz;

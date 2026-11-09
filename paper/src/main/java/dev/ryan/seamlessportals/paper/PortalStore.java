@@ -67,6 +67,9 @@ final class PortalStore {
 			if (portal.panelDepth() != 0) {
 				section.set("panel-depth", portal.panelDepth());
 			}
+			if (portal.twoFaced()) {
+				section.set("two-faced", true);
+			}
 			switch (portal.destination()) {
 				case CustomPortal.Destination.Portal(String partner) -> section.set("destination.portal", partner);
 				case CustomPortal.Destination.Target(String world, double x, double y, double z, float yaw, float pitch) -> {
@@ -110,7 +113,7 @@ final class PortalStore {
 					(float) section.getDouble("destination.yaw"), (float) section.getDouble("destination.pitch"));
 		}
 		return new CustomPortal(name, section.getString("world"), end, destination, CustomPortal.Access.parse(section.getString("public", "false")),
-				section.getInt("panel-depth", 0));
+				section.getInt("panel-depth", 0), section.getBoolean("two-faced", false));
 	}
 
 	private static Direction direction(String name) {

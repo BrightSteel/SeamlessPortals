@@ -14,6 +14,7 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -52,11 +53,13 @@ public final class CustomPortalTravel {
 		for (CustomPortal portal : CustomPortals.all()) {
 			portals.add(portal.name());
 			ServerLevel level = CustomPortals.level(server, portal.world());
-			PortalLink link = level == null ? null : CustomPortals.link(server, portal);
-			if (link == null) {
+			List<PortalLink> links = level == null ? List.of() : CustomPortals.links(server, portal);
+			if (links.isEmpty()) {
 				continue;
 			}
-			PortalGeometry geometry = PortalGeometry.of(link);
+			// A two-faced portal's faces: each goes through from its own side.
+			List<PortalGeometry> geometries = links.stream().map(PortalGeometry::of).toList();
+			PortalGeometry geometry = geometries.getFirst();
 			AABB opening = PortalGeometry.box(portal.end());
 			boolean onContact = portal.end().fill() == PortalFill.LAVA;
 			// Lava hurts on touch, so it sends on touch: against the whole fill blocks, not the plane.
@@ -76,14 +79,18 @@ public final class CustomPortalTravel {
 					continue;
 				}
 				Vec3 last = lastPoints.put(id, point);
-				boolean through = onContact
-						? entity.getBoundingBox().intersects(fillBlocks)
-						: last != null && last.distanceToSqr(point) <= MAX_STEP * MAX_STEP && geometry.entersSource(last, point);
-				if (!through || entity instanceof ServerPlayer player && !CustomPortals.canUse(player, portal)) {
+				int face = -1;
+				for (int i = 0; i < geometries.size() && face < 0; i++) {
+					boolean through = onContact
+							? entity.getBoundingBox().intersects(fillBlocks)
+							: last != null && last.distanceToSqr(point) <= MAX_STEP * MAX_STEP && geometries.get(i).entersSource(last, point);
+					face = through ? i : -1;
+				}
+				if (face < 0 || entity instanceof ServerPlayer player && !CustomPortals.canUse(player, portal)) {
 					continue;
 				}
 				playerSent |= entity instanceof ServerPlayer || entity.hasPassenger(passenger -> passenger instanceof ServerPlayer);
-				send(server, entity, portal, link, geometry, onContact);
+				send(server, entity, portal, links.get(face), geometries.get(face), onContact);
 			}
 			lastPoints.keySet().retainAll(seen);
 			if (playerSent && portal.destination() instanceof CustomPortal.Destination.Random) {
